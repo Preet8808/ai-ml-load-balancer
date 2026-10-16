@@ -52,17 +52,12 @@ class RoundRobin(Algorithm):
     name = "round_robin"
 
     def __init__(self):
-        self._servers = None
+        self._server_ids = None
         self._cycle = None
 
     def _rebuild_cycle(self, servers: List[ServerInfo]):
-        """Rebuild the weighted cycle whenever the server list changes."""
-        weighted = []
-        for server in servers:
-            weight = max(1, int(server.weight))
-            for _ in range(weight):
-                weighted.append(server)
-        self._cycle = itertools.cycle(weighted)
+        """Rebuild the round-robin cycle whenever the healthy server set changes."""
+        self._cycle = itertools.cycle(list(servers))
 
     def choose_server(
         self,
@@ -73,8 +68,9 @@ class RoundRobin(Algorithm):
         if not healthy:
             return None
 
-        if self._servers is not healthy:
-            self._servers = healthy
+        current_ids = [s.server_id for s in healthy]
+        if current_ids != self._server_ids:
+            self._server_ids = current_ids
             self._rebuild_cycle(healthy)
 
         server = next(self._cycle)
@@ -112,8 +108,9 @@ class WeightedRoundRobin(Algorithm):
         if not healthy:
             return None
 
-        if self._servers is not healthy:
-            self._servers = healthy
+        server_ids = [s.server_id for s in healthy]
+        if self._servers != server_ids:
+            self._servers = server_ids
             self._rebuild_cycle(healthy)
 
         server = next(self._cycle)
