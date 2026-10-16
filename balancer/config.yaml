@@ -1,0 +1,45 @@
+# AI/ML Load Balancer Configuration
+# Edit the algorithm to change routing strategy
+
+algorithm: round_robin  # Options: random, round_robin, weighted_rr, least_conn, weighted_least_conn, least_response_time
+
+servers:
+  - server_id: backend1
+    host: backend1
+    port: 8000
+    weight: 2.0          # CPU limit proportion
+    cpu_limit: 2.0       # Cores
+    mem_limit_mb: 512    # Memory in MB
+
+  - server_id: backend2
+    host: backend2
+    port: 8000
+    weight: 1.0
+    cpu_limit: 1.0
+    mem_limit_mb: 256
+
+  - server_id: backend3
+    host: backend3
+    port: 8000
+    weight: 1.0
+    cpu_limit: 1.0
+    mem_limit_mb: 512
+
+  - server_id: backend4
+    host: backend4
+    port: 8000
+    weight: 0.5
+    cpu_limit: 0.5
+    mem_limit_mb: 128
+
+sla_ms: 500              # Service Level Agreement threshold in milliseconds
+
+# Monitoring settings
+metrics_poll_interval_s: 1
+stale_threshold_s: 3.0   # Metrics older than this are considered stale
+health_check_interval_s: 2
+health_check_failures_threshold: 3
+health_check_success_threshold: 3
+
+# Fallback settings
+fallback_to_least_conn: true
