@@ -1,0 +1,25 @@
+# AI/ML Load Balancer - Python dependencies
+
+# Core
+fastapi>=0.110.0
+uvicorn>=0.29.0
+httpx>=0.27.0
+
+# Testing
+pytest>=8.0.0
+pytest-cov>=4.0.0
+
+# Linting
+ruff>=0.6.0
+black>=24.0.0
+
+# Backend
+psutil>=5.9.0
+
+# ML stack (added in later phases)
+# scikit-learn>=1.4.0
+# XGBoost>=2.0.0
+# LightGBM>=4.0.0
+# pandas>=2.2.0
+# numpy>=1.26.0
+# joblib>=1.3.0

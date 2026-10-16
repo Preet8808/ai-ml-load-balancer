@@ -1,0 +1,64 @@
+services:
+  balancer:
+    build:
+      context: .
+      dockerfile: Dockerfile.balancer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend1
+      - backend2
+      - backend3
+      - backend4
+    environment:
+      - ALGORITHM=round_robin
+    networks:
+      - balancer-net
+
+  backend1:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    cpus: "2.0"
+    mem_limit: "512m"
+    environment:
+      - BACKEND_ID=1
+    networks:
+      - balancer-net
+
+  backend2:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    cpus: "1.0"
+    mem_limit: "256m"
+    environment:
+      - BACKEND_ID=2
+    networks:
+      - balancer-net
+
+  backend3:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    cpus: "1.0"
+    mem_limit: "512m"
+    environment:
+      - BACKEND_ID=3
+    networks:
+      - balancer-net
+
+  backend4:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    cpus: "0.5"
+    mem_limit: "128m"
+    environment:
+      - BACKEND_ID=4
+    networks:
+      - balancer-net
+
+networks:
+  balancer-net:
+    driver: bridge

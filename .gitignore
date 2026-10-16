@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.venv*
+.env
+*.egg-info/
+dist/
+build/
+
+# Docker
+docker-compose.override.yml
+*.tar
+*.swp
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+coverage/
+htmlcov/
+.coverage
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files
+dataset_*.parquet
+*.csv
+
+# Log files
+*.log
+
+# Project-specific
+model_*.pkl
+trained_models/
+results/
+logs/
