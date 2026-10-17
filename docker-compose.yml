@@ -12,6 +12,13 @@ services:
       - backend4
     environment:
       - ALGORITHM=round_robin
+    volumes:
+      - ./logs:/app/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - balancer-net
 
@@ -25,6 +32,11 @@ services:
       - BACKEND_ID=1
       - BACKEND_CPUS=2.0
       - BACKEND_MEM=512
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     networks:
       - balancer-net
 
@@ -38,6 +50,11 @@ services:
       - BACKEND_ID=2
       - BACKEND_CPUS=1.0
       - BACKEND_MEM=256
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     networks:
       - balancer-net
 
@@ -51,6 +68,11 @@ services:
       - BACKEND_ID=3
       - BACKEND_CPUS=1.0
       - BACKEND_MEM=512
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     networks:
       - balancer-net
 
@@ -64,6 +86,11 @@ services:
       - BACKEND_ID=4
       - BACKEND_CPUS=0.5
       - BACKEND_MEM=128
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     networks:
       - balancer-net
 
