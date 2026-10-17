@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.balancer
     ports:
-      - "8080:8080"
+      - "9090:8080"
     depends_on:
       - backend1
       - backend2
@@ -23,6 +23,8 @@ services:
     mem_limit: "512m"
     environment:
       - BACKEND_ID=1
+      - BACKEND_CPUS=2.0
+      - BACKEND_MEM=512
     networks:
       - balancer-net
 
@@ -34,6 +36,8 @@ services:
     mem_limit: "256m"
     environment:
       - BACKEND_ID=2
+      - BACKEND_CPUS=1.0
+      - BACKEND_MEM=256
     networks:
       - balancer-net
 
@@ -45,6 +49,8 @@ services:
     mem_limit: "512m"
     environment:
       - BACKEND_ID=3
+      - BACKEND_CPUS=1.0
+      - BACKEND_MEM=512
     networks:
       - balancer-net
 
@@ -56,6 +62,8 @@ services:
     mem_limit: "128m"
     environment:
       - BACKEND_ID=4
+      - BACKEND_CPUS=0.5
+      - BACKEND_MEM=128
     networks:
       - balancer-net
 

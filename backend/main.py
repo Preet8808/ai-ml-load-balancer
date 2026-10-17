@@ -96,3 +96,8 @@ async def catch_all(request: Request, path: str):
     """Catch-all for unknown routes."""
     result = sum(i * i for i in range(5000))
     return {"id": BACKEND_ID, "path": path, "result": result}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

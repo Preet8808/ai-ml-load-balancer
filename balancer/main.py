@@ -221,7 +221,7 @@ async def proxy(request: Request, path: str):
             "req_rate_5s": server.metrics.req_rate_5s,
             "rt_ewma_ms": server.metrics.rt_ewma_ms,
             "rt_p95_5s_ms": server.metrics.rt_p95_5s_ms,
-            "err_rate_5s": server.metrics.err_rate_5s,
+            "err_rate_5s": server.metrics.error_rate_5s,
             "cpu_limit": server.metrics.cpu_limit,
             "cpu_delta_5s": server.metrics.cpu_delta_5s,
         }
@@ -267,3 +267,8 @@ async def proxy(request: Request, path: str):
         # Decrement in-flight count
         if server.metrics:
             server.metrics.inflight_requests = max(0, server.metrics.inflight_requests - 1)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
