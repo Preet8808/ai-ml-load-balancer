@@ -1,0 +1,19 @@
+# Build context hygiene.
+#
+# `COPY . .` used to sweep in the collected dataset and the VCS history, so
+# every new Parquet file invalidated the application layer and the daemon
+# received ~20 MB it never used. `bench/` must stay: the balancer image is
+# also the load generator's image, and that generator runs
+# bench/traffic_profiles.py. `models/` is deliberately not excluded, because
+# the Phase 5 router loads its artifact from inside the image.
+.git
+.github
+data
+logs
+scratch
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.venv
+*.log
