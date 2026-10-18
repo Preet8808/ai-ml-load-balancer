@@ -139,6 +139,60 @@ async def test_requests_outside_a_run_are_dropped_not_mislabelled(tmp_path):
     assert logger.status()["dropped"] == 1
     await logger.stop()
 
+
+@pytest.mark.asyncio
+async def test_a_row_finishing_during_seal_does_not_leak_into_the_next_run(tmp_path, monkeypatch):
+    """
+    A file must hold exactly one run_id.
+
+    A request that completes while seal() is awaiting its worker thread gets
+    stamped with the run being sealed and appended after the drain snapshot,
+    so it can never reach that run's file. Left buffered it lands in the next
+    run's file still carrying the old id. That is not hypothetical: a warm-up
+    row turned up in a collected cell's file, and that request had started
+    3.5 s before the cell's run opened.
+    """
+    log_dir = str(tmp_path / "logs")
+    logger = RequestLogger(log_dir=log_dir, buffer_size=100, flush_interval=100)
+    await logger.start()
+    await logger.start_run("run_a")
+
+    def row(ts):
+        return {
+            "timestamp": ts, "req_type": "light", "payload_kb": 0.0,
+            "server_id": "backend1", "srv_cpu_pct": 10.0, "srv_mem_pct": 5.0,
+            "inflight": 1, "req_rate_5s": 3.0, "rt_ewma_ms": 20.0,
+            "rt_p95_5s_ms": 30.0, "err_rate_5s": 0.0, "cpu_limit": 1.0,
+            "cpu_delta_5s": 0.5, "response_ms": 21.0, "status": 200,
+        }
+
+    await logger.log(row(1.0))
+
+    # Hold the drain inside its worker thread, so the request below completes
+    # while seal() is awaiting it rather than after it has closed the file.
+    real_write = logger._write_batch
+
+    def slow_write(batch):
+        time.sleep(0.2)
+        real_write(batch)
+
+    monkeypatch.setattr(logger, "_write_batch", slow_write)
+
+    sealing = asyncio.create_task(logger.seal())
+    await asyncio.sleep(0.05)     # seal() has taken its snapshot and is draining
+    await logger.log(row(2.0))    # arrives mid-drain, stamped run_a
+    sealed = await sealing
+
+    await logger.start_run("run_b")
+    await logger.log(row(3.0))
+    second = await logger.seal()
+
+    assert pq.read_table(sealed["path"]).num_rows == 1
+    assert pq.read_table(second["path"]).column("run_id").to_pylist() == ["run_b"]
+    assert logger.status()["dropped"] == 1
+
+    await logger.stop()
+
 @pytest.mark.asyncio
 async def test_collector_health_state_machine():
     from balancer.interfaces import ServerMetrics

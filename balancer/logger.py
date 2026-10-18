@@ -172,6 +172,19 @@ class RequestLogger:
             except Exception as exc:
                 error = error or f"close failed: {exc}"
 
+            # A request can finish while the drain above is awaiting its worker
+            # thread. log() still sees the writer installed, so it stamps the
+            # row with this run and appends it after the drain has already
+            # taken its snapshot. That row can no longer reach this file, and
+            # leaving it buffered flushes it into the *next* run's file still
+            # carrying this run's id — the one thing this logger exists to
+            # prevent. Count it as dropped: one run_id per file is what
+            # run-grouped cross-validation depends on.
+            stray = len(self._buffer)
+            if stray:
+                self._dropped += stray
+                self._buffer = []
+
             # Clear the writer whatever happened, so the next run can start and
             # the failure surfaces as a reported `error` instead of a 500.
             self._writer = None
