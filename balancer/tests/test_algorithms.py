@@ -11,9 +11,6 @@ Tests:
 - LeastResponseTime picks the server with lowest EWMA response time
 """
 
-import sys
-sys.path.insert(0, 'C:/Users/DELL/projects/ai_ml_load_balancer')
-
 import pytest
 from balancer.algorithms import (
     Random,

@@ -8,18 +8,31 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned rather than `ubuntu-latest`: GitHub starts migrating that label to
+    # Ubuntu 26 on 2026-10-19, and a runner image change mid-semester is a
+    # silent way for a green build to start failing.
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v4
+    # v5 / v6 run on the Node 24 runtime. The v4 / v5 pair this replaced still
+    # targeted Node 20, which the runner only ran through a compatibility shim
+    # and announced as deprecated on every run.
+    - uses: actions/checkout@v5
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
+        cache: 'pip'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-asyncio
-        pip install fastapi uvicorn httpx pyyaml psutil pandas pyarrow
+        # Installed from requirements.txt rather than a hand-written list: the
+        # signal gate and the training tests both import scikit-learn, and an
+        # inline list that drifts from the real requirements turns a missing
+        # dependency into a CI-only failure that looks like a broken test.
+        pip install -r requirements.txt
     - name: Run tests
       run: |
-        pytest -v
+        # `python -m pytest` also puts the working directory on sys.path, so
+        # the run does not depend on which collection order pytest happens to
+        # use. Matches the command documented for local use.
+        python -m pytest -v

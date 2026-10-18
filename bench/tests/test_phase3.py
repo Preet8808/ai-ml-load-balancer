@@ -1,8 +1,5 @@
 """Tests for Phase 3: Dataset generation components."""
 
-import sys
-sys.path.insert(0, 'C:/Users/DELL/projects/ai_ml_load_balancer')
-
 import asyncio
 import os
 import time
