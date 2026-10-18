@@ -34,6 +34,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from sklearn.base import clone
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -173,21 +174,34 @@ def build_models() -> Dict[str, Any]:
     return {"ridge": ridge, "random_forest": rf, "xgboost": xgb_model}
 
 
-def cross_validate(model, X: pd.DataFrame, y: pd.Series, groups: np.ndarray, n_splits: int = 5) -> Dict[str, float]:
-    """GroupKFold by run_id, so folds never share a run."""
+def cross_validate(model, X, y, groups, n_splits: int = 5) -> Dict[str, float]:
+    """
+    GroupKFold by run_id, so folds never share a run.
+
+    Two details matter here. Indexing is positional through numpy, because the
+    training path keeps X as a DataFrame while y is a log-transformed ndarray,
+    and mixing the two access styles is what broke this. And every fold fits a
+    clone rather than the model handed in: fitting that one would leave it
+    trained on a single fold's subset, so the artifact saved afterwards would
+    silently be a model that never saw part of its own training split.
+    """
     unique_groups = len(np.unique(groups))
     splits = min(n_splits, unique_groups)
     if splits < 2:
         return {}
 
+    X_values = X.to_numpy() if hasattr(X, "to_numpy") else np.asarray(X)
+    y_values = np.asarray(y)
+
     cv = GroupKFold(n_splits=splits)
-    preds = np.full(len(y), np.nan)
-    for train_idx, test_idx in cv.split(X, y, groups=groups):
-        model.fit(X.iloc[train_idx], y.iloc[train_idx])
-        preds[test_idx] = model.predict(X.iloc[test_idx])
+    preds = np.full(len(y_values), np.nan)
+    for train_idx, test_idx in cv.split(X_values, y_values, groups=groups):
+        fold_model = clone(model)
+        fold_model.fit(X_values[train_idx], y_values[train_idx])
+        preds[test_idx] = fold_model.predict(X_values[test_idx])
 
     ok = ~np.isnan(preds)
-    return evaluate(np.asarray(y)[ok], preds[ok], np.expm1(np.asarray(y)[ok]))
+    return evaluate(y_values[ok], preds[ok], np.expm1(y_values[ok]))
 
 
 def measure_inference(model, X: pd.DataFrame, n_servers: int = 5, trials: int = 200) -> Dict[str, float]:

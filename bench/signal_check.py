@@ -10,6 +10,7 @@ It also catches the specific failure modes that produced an unusable dataset
 earlier: constant features, a single shared run_id, and unreadable files.
 """
 
+import argparse
 import glob
 import os
 import sys
@@ -173,6 +174,16 @@ def signal_gate(data_dir: str) -> bool:
     return True
 
 
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Signal gate: reject datasets whose latency is not explained "
+                    "by server state",
+    )
+    parser.add_argument("data", nargs="?", default="data",
+                        help="directory of Parquet files to check (default: data)")
+    args = parser.parse_args()
+    return 0 if signal_gate(args.data) else 2
+
+
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else "data"
-    sys.exit(0 if signal_gate(target) else 2)
+    sys.exit(main())

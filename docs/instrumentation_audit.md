@@ -196,6 +196,12 @@ project needs. *Fix:* constant work; the quota decides how long it takes.
 
 ## Where the queue actually was
 
+> **Superseded — see Part 3.** This measurement was real but its cause was not
+> the proxy. The load generator was running *inside the balancer's container*
+> and consuming about a full core of that container's CPU, so the balancer's
+> event loop could not service the requests it had accepted. The 181 in-flight
+> requests were the router starving, not the router queueing on its own account.
+
 With 200 concurrent users, instrumenting both sides at once settled it:
 
 ```
@@ -212,6 +218,12 @@ uniform queue rather than endpoint-specific cost.
 
 ## Saturation curve
 
+> **Superseded — see Part 3.** These numbers describe the test harness hitting
+> its own CPU limit, not the stack saturating. The generator ran in the
+> balancer's container, so "throughput peaks near 20 users and then falls" is
+> the signal that the generator had taken over the router's CPU. Treat the table
+> as a record of the wrong turn rather than as a property of the balancer.
+
 Aggregate latency against concurrent users (in-container Locust, round robin):
 
 | Users | req/s | avg | median |
@@ -226,9 +238,83 @@ is CPU-bound and past roughly 80 concurrent users the proxy degrades without
 the backends getting busier. Dataset runs are therefore sized to 60–110 users
 so that server state, rather than proxy collapse, explains the latency.
 
+---
+
+# Part 3 — The harness was the bottleneck
+
+Part 2 fixed real defects in the balancer, and the signal improved from 0.149 to
+about 0.24. It then stalled, and the load level was being tuned against the
+curve above. Two harness defects were found behind it.
+
+## The load generator shared the balancer's cgroup
+
+`run_locust` used `docker exec` into the balancer container, so the generator and
+the router competed for the same CPU. Measured directly (`gen_cpu` is the
+generator's own CPU, sampled with `time.process_time()` inside the generator):
+
+```
+balancer:8080  users=10   118 req/s  p50= 66.2 ms  gen_cpu=0.51
+balancer:8080  users=40    52 req/s  p50=602.9 ms  gen_cpu=0.36
+balancer:8080  users=80    41 req/s  p50=1102.5 ms gen_cpu=0.32
+```
+
+The generator needs roughly **one core per 200 req/s** (about 5 ms of client CPU
+per request for `httpx`), which is enormous on this host. Every request the
+generator made took CPU from the thing it was measuring, so higher concurrency
+produced *lower* throughput. That is precisely the shape recorded above and it
+was misread as proxy collapse.
+
+Two fixes: the generator now runs as its **own container** on the compose
+network (reusing the balancer image, with its own CPU ceiling), and it uses
+Locust's `FastHttpUser` instead of `HttpUser`.
+
+## The quotas summed to more than the machine
+
+```
+docker info CPUs : 4        host : i7-7500U, 2 cores / 4 threads
+backend quotas   : 2.0 + 1.0 + 1.0 + 0.5 = 4.5 vCPU   (plus balancer, plus generator)
+```
+
+Every quota was a share of a 4-vCPU budget that the backends alone already
+exceeded, on a laptop CPU whose *physical* capacity is two cores. Under those
+conditions per-request latency is decided by the scheduler, so no server's own
+state can explain it and the state-only R² collapses no matter how the load
+level is tuned. Quotas now keep the 4:2:2:1 ratio that makes the cluster
+heterogeneous — and that `cpu_limit` exposes as a routing feature — while
+fitting inside the machine.
+
+## The uncontended floor
+
+With the generator isolated, sequential requests give a clean baseline:
+
+```
+balancer:8080  sequential n=200  p50= 9.7 ms  p95= 24.1 ms  min= 6.1 ms
+backend1:8000  sequential n=200  p50= 3.8 ms  p95=  7.5 ms  min= 2.9 ms
+```
+
+The balancer's own overhead is ~6 ms per request. That is the floor against
+which any "server looks slow" claim has to be read, and it is why the sustainable
+offered load on this host is ~120 req/s rather than the ~600 req/s a quiescent
+reading of the quotas would suggest.
+
+## Drift across a matrix
+
+A 6-cell pilot showed the **first** cell running ~40% slower than the last
+(45.7 req/s at p50 79.9 ms, rising to 84.4 req/s at p50 31.7 ms). Ordered cells
+therefore confound the profile with *when* the cell ran. Cells are now shuffled
+with a fixed seed and preceded by a throwaway warm-up run that is sealed and
+deleted, so it cannot reach the dataset or the gate.
+
 ## Result
 
-After these fixes, the same signal test that scored 0.018 on the original
-dataset and 0.149 on the first corrected one now scores **R² ≈ 0.51–0.55 from
-server-state features alone**, with endpoint identity contributing essentially
-nothing (R² ≈ 0.000). The features describe load, not endpoint identity.
+The same gate that rejected the original dataset at R² = 0.018, and then sat at
+0.24 when Part 2's fixes were applied, now reports:
+
+| Dataset | rows | runs | R² state-only | R² endpoint-only |
+|---|---|---|---|---|
+| Original (Phase 3) | — | 1 | 0.018 | high |
+| After Part 2 | 28,041 | 1 | 0.236 | 0.011 |
+| After Part 3 | 23,727 | 6 | **0.661** | 0.078 |
+
+The features describe load, not endpoint identity, and the gate passes on rows
+rather than on a single run.

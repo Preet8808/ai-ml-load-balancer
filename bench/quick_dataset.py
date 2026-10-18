@@ -431,6 +431,12 @@ def main():
 
         print(f"\n[{index}/{len(combos)}] {run_id}  (users={users}, {args.duration}s)")
 
+        # A cell that takes far longer than its scripted load means the host
+        # stalled (a sleep/suspend, or the Docker VM hanging). The cell's rows
+        # then cover a shorter load window than every other cell, and nothing
+        # in the data shows that except the wall clock, so it is recorded here.
+        cell_started = time.time()
+
         set_algorithm(policy)
 
         # Seal the previous run and open a fresh file for this one
@@ -477,6 +483,7 @@ def main():
         check = verify_parquet(dest)
         print(f"    collected: {dest.name} -> {check}")
 
+        cell_wall = time.time() - cell_started
         meta = {
             "run_id": run_id,
             "profile": profile,
@@ -486,8 +493,20 @@ def main():
             "seed": args.seed,
             "file": dest.name,
             "started_at": sealed["path"],
+            "wall_s": round(cell_wall, 1),
             "verified": check,
         }
+
+        # Generous: the scripted overhead is ~35 s (waits, fault window, locust
+        # shutdown, collection), so anything past duration+120 s is a stall
+        # rather than slow load.
+        if cell_wall > args.duration + 120:
+            meta["suspect"] = (
+                f"cell took {cell_wall:.0f}s against a {args.duration}s load run; "
+                "the host stalled and this cell's window is truncated"
+            )
+            print(f"    WARNING: {meta['suspect']}")
+
         manifest.append(meta)
         with open(data_dir / f"meta_{run_id}.json", "w") as f:
             json.dump(meta, f, indent=2)
