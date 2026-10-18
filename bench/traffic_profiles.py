@@ -25,7 +25,7 @@ import math
 import os
 import random
 
-from locust import HttpUser, LoadTestShape, between, events, task
+from locust import FastHttpUser, LoadTestShape, between, events, task
 
 TRAFFIC_PROFILE = os.environ.get("TRAFFIC_PROFILE", "steady").lower()
 TRAFFIC_USERS = int(os.environ.get("TRAFFIC_USERS", "80"))
@@ -50,8 +50,16 @@ def endpoint_mix() -> list[tuple[str, float]]:
     return DEFAULT_MIX
 
 
-class ApiUser(HttpUser):
-    """Single user class driven by whichever LoadTestShape is active."""
+class ApiUser(FastHttpUser):
+    """
+    Single user class driven by whichever LoadTestShape is active.
+
+    FastHttpUser (geventhttpclient) rather than HttpUser (requests): the
+    generator is capped at a fraction of a core, and the requests-based client
+    spent about 5 ms of CPU per request, which throttled the generator long
+    before it loaded the stack. The observed generator CPU is the number that
+    matters when the whole experiment has ~2 physical cores to share.
+    """
 
     wait_time = between(0.0, 0.2)
 
@@ -63,9 +71,16 @@ class ApiUser(HttpUser):
 
         # POST a real body for /payload so payload_kb varies and is known at
         # routing time, instead of being a constant zero for GET-only traffic.
+        # The body is pre-encoded because the gevent client does not form-encode
+        # a dict the way the requests-based client does.
         if path == "/payload":
             size_kb = random.choice((2, 8, 32, 128))
-            self.client.post(path, data={"blob": "x" * (size_kb * 1024)}, name=path)
+            self.client.post(
+                path,
+                data="blob=" + "x" * (size_kb * 1024),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                name=path,
+            )
         else:
             self.client.get(path, name=path)
 
@@ -107,19 +122,30 @@ class RampShape(BaseShape):
 
 
 class BurstShape(BaseShape):
-    """Baseline concurrency with periodic 2.5x spikes."""
+    """
+    Baseline concurrency with periodic spikes.
+
+    The spike multiplier is 1.6 rather than the textbook 2.5 because the host
+    tops out near 150 req/s once the balancer, the backends and the generator
+    share 2 physical cores. A 2.5x spike at the base concurrency asks for
+    roughly 250 req/s, which only ever measured the generator hitting its own
+    CPU quota: the shape flattened and every burst cell came out the same size
+    as a steady one.
+    """
 
     PROFILE = "burst"
     INTERVAL_S = 45.0
     BURST_S = 15.0
+    PEAK_MULT = 1.6
+    BASE_MULT = 0.5
 
     def tick(self):
         if self.expired():
             return None
         phase = self.get_run_time() % self.INTERVAL_S
         if phase < self.BURST_S:
-            return (int(TRAFFIC_USERS * 2.5), SPAWN_RATE)
-        return (int(TRAFFIC_USERS * 0.6), SPAWN_RATE)
+            return (int(TRAFFIC_USERS * self.PEAK_MULT), SPAWN_RATE)
+        return (int(TRAFFIC_USERS * self.BASE_MULT), SPAWN_RATE)
 
 
 class WaveShape(BaseShape):

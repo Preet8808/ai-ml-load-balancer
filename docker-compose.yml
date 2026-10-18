@@ -5,6 +5,14 @@ services:
       dockerfile: Dockerfile.balancer
     ports:
       - "9090:8080"
+    # The host is 2 physical cores / 4 threads and Docker exposes all 4 as
+    # vCPU. Every quota below is a share of that 4-vCPU budget, and the sum has
+    # to leave room for the OS, the Docker VM and the load generator. When the
+    # quotas summed above the machine's capacity, every latency sample was set
+    # by scheduler contention rather than by any server's own state, which is
+    # precisely the signal the dataset is supposed to contain.
+    cpus: "2.0"
+    mem_limit: "512m"
     depends_on:
       - backend1
       - backend2
@@ -22,15 +30,20 @@ services:
     networks:
       - balancer-net
 
+  # Backend quotas keep the 4:2:2:1 ratio that makes the cluster heterogeneous
+  # (and that cpu_limit exposes as a routing feature) while summing to 1.75
+  # vCPU instead of 4.5. A pipeline of overlapped work still needs headroom for
+  # 2.0 (balancer) + 1.75 (backends) + 0.5 (generator) = 4.25 vCPU across
+  # partially idle services; the quotas are ceilings, not demand.
   backend1:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    cpus: "2.0"
+    cpus: "0.8"
     mem_limit: "512m"
     environment:
       - BACKEND_ID=1
-      - BACKEND_CPUS=2.0
+      - BACKEND_CPUS=0.8
       - BACKEND_MEM=512
     logging:
       driver: json-file
@@ -44,11 +57,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    cpus: "1.0"
+    cpus: "0.4"
     mem_limit: "256m"
     environment:
       - BACKEND_ID=2
-      - BACKEND_CPUS=1.0
+      - BACKEND_CPUS=0.4
       - BACKEND_MEM=256
     logging:
       driver: json-file
@@ -62,11 +75,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    cpus: "1.0"
+    cpus: "0.4"
     mem_limit: "512m"
     environment:
       - BACKEND_ID=3
-      - BACKEND_CPUS=1.0
+      - BACKEND_CPUS=0.4
       - BACKEND_MEM=512
     logging:
       driver: json-file
@@ -80,11 +93,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    cpus: "0.5"
+    cpus: "0.15"
     mem_limit: "128m"
     environment:
       - BACKEND_ID=4
-      - BACKEND_CPUS=0.5
+      - BACKEND_CPUS=0.15
       - BACKEND_MEM=128
     logging:
       driver: json-file

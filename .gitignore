@@ -37,6 +37,8 @@ Thumbs.db
 # Data files
 dataset_*.parquet
 *.csv
+data/
+scratch/
 
 # Log files
 *.log

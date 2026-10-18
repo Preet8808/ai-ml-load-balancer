@@ -20,6 +20,7 @@ Usage:
 import argparse
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -38,24 +39,50 @@ DATA_DIR = PROJECT_ROOT / "data"
 BALANCER_CONTAINER = "ai_ml_load_balancer-balancer-1"
 DOCKER_BIN = r"C:\Program Files\Docker\Docker\resources\bin"
 
+# CPU the one-shot load generator may use. The generator is a full HTTP client
+# stack and burns roughly a core at a few hundred requests per second, so on a
+# 4-vCPU (2 physical core) host it has to be capped and kept out of the
+# balancer's cgroup. Letting it run inside the balancer container meant the
+# generator starved the very component under test, which looked exactly like a
+# proxy bottleneck: throughput fell as concurrency rose while the backends sat
+# idle. The generator is now measured rather than assumed to be free.
+GENERATOR_CPUS = os.environ.get("GENERATOR_CPUS", "1.0")
+GENERATOR_MEM = os.environ.get("GENERATOR_MEM", "512m")
+
 PROFILES = ["steady", "ramp", "burst", "wave", "mixed_cost", "degraded"]
 POLICIES = ["round_robin", "least_conn", "random"]
 
-# Concurrency per profile. Chosen to saturate the 4.5 cores of cgroup quota
-# shared across the four backends, so CPU throttling and queueing appear.
-# Concurrency per profile, chosen from a measured saturation curve with the
-# load generator inside the compose network: 20 users -> 145 req/s at 36 ms,
-# 40 -> 118 req/s at 224 ms, 80 -> 97 req/s at 641 ms, 200 -> 87 req/s at
-# 1853 ms. Past roughly 80 concurrent the proxy queues requests while the
-# backends sit idle, which produces latency without producing a learnable
-# signal. These values keep each run partially loaded.
+# Concurrency per profile.
+#
+# The previous values (40-80) were chosen from a saturation curve that turned
+# out to be an artefact: the load generator ran inside the balancer container
+# and, at ~5 ms of client CPU per request, burned about a full core there,
+# starving the router. That looked like a proxy bottleneck ("the proxy queues
+# while the backends sit idle") and led to tuning against a measurement of the
+# test harness rather than of the balancer.
+#
+# Measured on this host, with the generator in its own container:
+#   * an uncontended /ping costs 9.7 ms through the balancer, 3.8 ms direct;
+#   * the generator needs ~1 core to drive ~200 req/s;
+#   * the host is 2 physical cores (4 vCPU), so ~120-150 req/s is the rate that
+#     can be driven without the generator or the host becoming the bottleneck
+#     instead of the backends.
+#
+# Load is therefore moderated rather than maximised. The dataset does not need
+# saturation: with heterogeneous backends (cpu_limit 0.8 down to 0.15) and a
+# cost-heterogeneous endpoint mix, a cheap server and an expensive one diverge
+# at quite low offered load, and that divergence is the learnable signal.
+#
+# mixed_cost carries the same concurrency as the rest even though its endpoint
+# mix costs several times more per request, so it gets fewer users to keep the
+# offered *work* comparable across profiles.
 PROFILE_USERS = {
-    "steady": 40,
-    "ramp": 60,
-    "burst": 80,
-    "wave": 55,
-    "mixed_cost": 60,
-    "degraded": 55,
+    "steady": 30,
+    "ramp": 30,
+    "burst": 30,
+    "wave": 30,
+    "mixed_cost": 24,
+    "degraded": 30,
 }
 PROFILE_SPAWN_RATE = 20
 PROFILE_WAIT = 5.0  # seconds of idle collection after sealing
@@ -76,9 +103,75 @@ def set_algorithm(policy: str) -> bool:
         return False
 
 
+def _docker(args: list[str], timeout: float = 60.0) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["PATH"] = DOCKER_BIN + os.pathsep + env.get("PATH", "")
+    return subprocess.run(
+        ["docker", *args], cwd=PROJECT_ROOT, env=env,
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def balancer_network() -> str:
+    """Network the running stack is attached to, so one-shot containers can join it."""
+    out = _docker([
+        "inspect", "-f",
+        "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}",
+        BALANCER_CONTAINER,
+    ])
+    net = (out.stdout or "").strip()
+    if not net:
+        raise RuntimeError(
+            f"could not determine the network of {BALANCER_CONTAINER}; "
+            "is the stack up? (docker compose up -d)"
+        )
+    return net
+
+
+def balancer_image() -> str:
+    """Image the balancer runs, reused as the load generator's image."""
+    out = _docker(["inspect", "-f", "{{.Config.Image}}", BALANCER_CONTAINER])
+    image = (out.stdout or "").strip()
+    if not image:
+        raise RuntimeError(f"could not determine the image of {BALANCER_CONTAINER}")
+    return image
+
+
+def run_generator(
+    args: list[str],
+    timeout: float,
+    cpus: str | None = None,
+    env: dict[str, object] | None = None,
+) -> subprocess.CompletedProcess:
+    """
+    Run a command in a throwaway container on the stack's network.
+
+    The load generator gets its own cgroup so its CPU use is visible and, more
+    importantly, bounded: it can no longer take CPU away from the balancer it is
+    supposed to be measuring. `env` becomes container environment variables and
+    must therefore be built here rather than folded into `args`, because `docker
+    run` only accepts options before the image name.
+    """
+    env_args: list[str] = []
+    for key, value in (env or {}).items():
+        env_args += ["-e", f"{key}={value}"]
+    return _docker(
+        [
+            "run", "--rm",
+            "--network", balancer_network(),
+            "--cpus", cpus or GENERATOR_CPUS,
+            "--memory", GENERATOR_MEM,
+            *env_args,
+            balancer_image(),
+            *args,
+        ],
+        timeout=timeout,
+    )
+
+
 def run_locust(profile: str, out_prefix: Path, duration: int, users: int) -> bool:
     """
-    Drive load from inside the balancer container.
+    Drive load from a separate container on the compose network.
 
     The load generator deliberately does NOT run on the Windows host. Driving
     60+ concurrent connections through Docker Desktop's port forwarder roughly
@@ -87,33 +180,36 @@ def run_locust(profile: str, out_prefix: Path, duration: int, users: int) -> boo
     stack rather than anything the load balancer controls. It would show up in
     the labels and drown out the signal we are trying to measure.
 
-    Measured: 20 users -> 145 req/s at 36 ms from inside the container, versus
-    44 req/s at 791 ms for 60 users through the host port forwarder.
+    It also no longer runs inside the balancer container. Measured on this host
+    (4 vCPU over 2 physical cores) the generator alone burns about one core, so
+    sharing the balancer's cgroup starved the router and produced a throughput
+    collapse that looked like a proxy bottleneck while the backends idled.
+
+    `out_prefix` is kept for callers that pass a scratch path; request statistics
+    come from the balancer's own log, so Locust writes no CSV here.
     """
     cmd = [
-        "docker", "exec",
-        "-e", f"TRAFFIC_PROFILE={profile}",
-        "-e", f"TRAFFIC_USERS={users}",
-        "-e", f"BENCH_DURATION={duration}",
-        "-e", f"SPAWN_RATE={PROFILE_SPAWN_RATE}",
-        BALANCER_CONTAINER,
         "python", "-m", "locust",
         "-f", "bench/traffic_profiles.py",
-        "--host", "http://localhost:8080",
+        "--host", "http://balancer:8080",
         "--headless",
         "-t", f"{duration + 30}s",
         "--only-summary",
         "--loglevel", "ERROR",
     ]
-    env = os.environ.copy()
-    env["PATH"] = DOCKER_BIN + os.pathsep + env.get("PATH", "")
 
-    print(f"    locust (in-network): profile={profile} users={users} {duration}s")
+    print(f"    locust (own container, {GENERATOR_CPUS} cpu): "
+          f"profile={profile} users={users} {duration}s")
     try:
-        result = subprocess.run(
-            cmd, cwd=PROJECT_ROOT, env=env,
-            timeout=duration + 150,
-            capture_output=True, text=True,
+        result = run_generator(
+            cmd,
+            timeout=duration + 180,
+            env={
+                "TRAFFIC_PROFILE": profile,
+                "TRAFFIC_USERS": users,
+                "BENCH_DURATION": duration,
+                "SPAWN_RATE": PROFILE_SPAWN_RATE,
+            },
         )
         if result.returncode != 0:
             print(f"    WARNING: locust exited {result.returncode}")
@@ -127,36 +223,83 @@ def run_locust(profile: str, out_prefix: Path, duration: int, users: int) -> boo
         return False
 
 
-def slow_backend(server: str, ms: int, background: bool = True) -> bool:
+def backend_control(server: str, path: str, params: dict, timeout_s: float = 30.0) -> bool:
     """
-    Fault injection: make a backend answer slowly for a while.
+    Call a control endpoint on a backend through the compose network.
 
-    Runs inside the balancer container so it can reach the backends over the
-    compose network, which the host cannot do.
+    Commands run inside the balancer container, which shares a network with the
+    backends; the host cannot reach them because no backend ports are published.
     """
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    url = f"http://{server}:8000{path}" + (f"?{query}" if query else "")
     script = (
-        "import httpx,time;"
-        f"r=httpx.get('http://{server}:8000/slow',params={{'ms':{ms}}},timeout={ms / 1000 + 10});"
-        "print(r.status_code)"
+        "import httpx;"
+        f"r=httpx.get('{url}', timeout={timeout_s});"
+        "print(r.status_code, r.text)"
     )
     cmd = ["docker", "exec", BALANCER_CONTAINER, "python", "-c", script]
     env = os.environ.copy()
     env["PATH"] = DOCKER_BIN + os.pathsep + env.get("PATH", "")
 
     try:
-        if background:
-            subprocess.Popen(
-                cmd, cwd=PROJECT_ROOT, env=env,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-        else:
-            return subprocess.run(
-                cmd, cwd=PROJECT_ROOT, env=env, timeout=ms / 1000 + 30
-            ).returncode == 0
+        result = subprocess.run(
+            cmd, cwd=PROJECT_ROOT, env=env,
+            capture_output=True, text=True, timeout=timeout_s + 30,
+        )
+        if result.returncode != 0:
+            print(f"    WARNING: control call failed: "
+                  f"{(result.stderr or '').strip().splitlines()[-1:]}")
+            return False
         return True
     except Exception as exc:
-        print(f"    WARNING: fault injection failed: {exc}")
+        print(f"    WARNING: control call failed: {exc}")
         return False
+
+
+def degrade_backend(server: str, latency_ms: int, error_rate: float, duration_s: float) -> bool:
+    """
+    Make one backend both slower and unreliable for a while.
+
+    The latency fault alone produces no errors, which leaves error_rate_5s a
+    constant zero and gives a router nothing to learn from on that axis.
+    """
+    slow = backend_control(
+        server, "/slow",
+        {"ms": latency_ms, "duration_s": duration_s},
+        timeout_s=max(10.0, latency_ms / 1000 + 10),
+    )
+    faulty = backend_control(
+        server, "/fault",
+        {"error_rate": error_rate, "duration_s": duration_s},
+    )
+    return slow and faulty
+
+
+def warm_up(seconds: int, users: int, policy: str = "round_robin") -> None:
+    """
+    Drive throwaway load before the measured matrix.
+
+    The first cell of a matrix is systematically slower than the rest: page
+    caches are cold, connection pools are empty and every backend is still
+    warming up. Measured across a 6-cell pilot, p50 fell from 42.9 ms in the
+    first cell to 27.0 ms by the fourth, and each later cell produced more rows
+    than the one before it. Left in place, that drift correlates the labels with
+    the order the cells happened to run in, which is exactly the kind of
+    confound the state features are supposed to explain away.
+
+    The warm-up run is sealed like any other and then deleted, so it cannot
+    reach the dataset or the signal gate.
+    """
+    print(f"  warming up for {seconds}s at {users} users...")
+    set_algorithm(policy)
+    _post("/admin/run", run_id="warmup")
+    run_locust("steady", DATA_DIR / "locust_warmup", seconds, users)
+    _post("/admin/seal")
+    removed = 0
+    for path in LOGS_DIR.glob("warmup_*.parquet"):
+        path.unlink(missing_ok=True)
+        removed += 1
+    print(f"  warm-up discarded ({removed} file(s))")
 
 
 def collect_sealed_file(run_id: str) -> Path | None:
@@ -183,13 +326,20 @@ def verify_parquet(path: Path) -> dict:
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
+    span = float(df["timestamp"].max() - df["timestamp"].min()) if len(df) else 0.0
+    ok = df[df["status"] < 400] if "status" in df.columns else df
     return {
         "ok": True,
         "rows": int(len(df)),
         "cols": int(len(df.columns)),
         "run_ids": sorted(df["run_id"].unique().tolist()),
-        "response_ms_p50": float(df["response_ms"].median()) if len(df) else 0.0,
-        "response_ms_max": float(df["response_ms"].max()) if len(df) else 0.0,
+        # Throughput and percentiles describe successful requests; count them
+        # over the whole file so the offered load of each cell is comparable.
+        "req_s": round(len(df) / span, 1) if span > 0 else 0.0,
+        "response_ms_p50": float(ok["response_ms"].median()) if len(ok) else 0.0,
+        "response_ms_p95": float(ok["response_ms"].quantile(0.95)) if len(ok) else 0.0,
+        "response_ms_max": float(ok["response_ms"].max()) if len(ok) else 0.0,
+        "error_pct": round(float((df["status"] >= 400).mean() * 100.0), 1) if len(df) else 0.0,
     }
 
 
@@ -205,6 +355,16 @@ def main():
                         help="backend to slow during the degraded profile")
     parser.add_argument("--fault-ms", type=int, default=400,
                         help="how long the faulted backend sleeps per request")
+    parser.add_argument("--fault-error-rate", type=float, default=0.35,
+                        help="fraction of requests the faulted backend fails")
+    parser.add_argument("--warmup", type=int, default=25,
+                        help="seconds of throwaway load before the matrix, to "
+                             "remove the cold-start drift from the first cell")
+    parser.add_argument("--ordered", action="store_true",
+                        help="run cells in profile/policy order instead of "
+                             "shuffling them (shuffling is the default so that "
+                             "drift over a long matrix does not line up with any "
+                             "one profile)")
     args = parser.parse_args()
 
     data_dir = Path(args.output)
@@ -212,11 +372,21 @@ def main():
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     combos = [
-        (p, pol)
+        (p, pol, r)
         for p in args.profiles
         for pol in args.policies
-        for _ in range(args.runs)
+        for r in range(args.runs)
     ]
+
+    # Cell order is shuffled by default. Over a 40 minute matrix the host itself
+    # drifts (background processes, thermal state, image housekeeping) and a
+    # measured PILOT showed the first cell running ~40% slower than the last. If
+    # cells run in profile order, that drift is confounded with the profiles
+    # themselves, so the model can partly "predict" a profile by knowing when it
+    # ran. Shuffling with a fixed seed spreads the drift across profiles and
+    # keeps the matrix reproducible.
+    if not args.ordered:
+        random.Random(args.seed).shuffle(combos)
 
     print("=" * 68)
     print("  Dataset generation")
@@ -251,70 +421,76 @@ def main():
     except Exception as exc:
         print(f"  WARNING: could not clear a pending run: {exc}")
 
-    for profile in args.profiles:
-        for policy in args.policies:
-            for repeat in range(args.runs):
-                index += 1
-                run_id = f"{profile}_{policy}_{repeat}"
-                users = PROFILE_USERS.get(profile, 80)
+    if args.warmup > 0:
+        warm_up(args.warmup, PROFILE_USERS.get("steady", 30), args.policies[0])
 
-                print(f"\n[{index}/{len(combos)}] {run_id}  (users={users}, {args.duration}s)")
+    for profile, policy, repeat in combos:
+        index += 1
+        run_id = f"{profile}_{policy}_{repeat}"
+        users = PROFILE_USERS.get(profile, 30)
 
-                set_algorithm(policy)
+        print(f"\n[{index}/{len(combos)}] {run_id}  (users={users}, {args.duration}s)")
 
-                # Seal the previous run and open a fresh file for this one
-                info = _post("/admin/run", run_id=run_id)
-                if info.get("previous"):
-                    print(f"    sealed previous: {Path(info['previous']['path']).name}"
-                          f" ({info['previous']['rows']} rows)")
+        set_algorithm(policy)
 
-                time.sleep(PROFILE_WAIT)
+        # Seal the previous run and open a fresh file for this one
+        info = _post("/admin/run", run_id=run_id)
+        if info.get("previous"):
+            print(f"    sealed previous: {Path(info['previous']['path']).name}"
+                  f" ({info['previous']['rows']} rows)")
 
-                csv_prefix = data_dir / f"locust_{run_id}"
+        time.sleep(PROFILE_WAIT)
 
-                # Degraded profile: slow one backend mid-run so the model sees
-                # a server whose latency climbs while its reported state lags
-                if profile == "degraded":
-                    time.sleep(min(20, args.duration // 3))
-                    if slow_backend(args.fault_server, args.fault_ms):
-                        print(f"    injected fault: {args.fault_server} +{args.fault_ms}ms")
+        csv_prefix = data_dir / f"locust_{run_id}"
 
-                ok = run_locust(profile, csv_prefix, args.duration, users)
+        # Degraded profile: make one backend slow and unreliable, so
+        # the model sees a server whose state and error rate diverge
+        # from its peers
+        if profile == "degraded":
+            time.sleep(min(15, args.duration // 4))
+            fault_window = args.duration * 0.75
+            if degrade_backend(args.fault_server, args.fault_ms,
+                               args.fault_error_rate, fault_window):
+                print(f"    injected fault: {args.fault_server} "
+                      f"+{args.fault_ms}ms, {args.fault_error_rate:.0%} errors "
+                      f"for {fault_window:.0f}s")
 
-                time.sleep(PROFILE_WAIT)
+        ok = run_locust(profile, csv_prefix, args.duration, users)
 
-                # Seal so the file is complete, then collect it
-                sealed = _post("/admin/seal").get("sealed")
-                if not sealed:
-                    print("    WARNING: nothing to seal")
-                    continue
+        time.sleep(PROFILE_WAIT)
 
-                if sealed.get("error"):
-                    print(f"    WARNING: seal reported {sealed['error']}")
+        # Seal so the file is complete, then collect it
+        sealed = _post("/admin/seal").get("sealed")
+        if not sealed:
+            print("    WARNING: nothing to seal")
+            continue
 
-                print(f"    sealed: {Path(sealed['path']).name} ({sealed['rows']} rows)")
+        if sealed.get("error"):
+            print(f"    WARNING: seal reported {sealed['error']}")
 
-                dest = collect_sealed_file(run_id)
-                if dest is None:
-                    continue
+        print(f"    sealed: {Path(sealed['path']).name} ({sealed['rows']} rows)")
 
-                check = verify_parquet(dest)
-                print(f"    collected: {dest.name} -> {check}")
+        dest = collect_sealed_file(run_id)
+        if dest is None:
+            continue
 
-                meta = {
-                    "run_id": run_id,
-                    "profile": profile,
-                    "policy": policy,
-                    "users": users,
-                    "duration_s": args.duration,
-                    "seed": args.seed,
-                    "file": dest.name,
-                    "started_at": sealed["path"],
-                    "verified": check,
-                }
-                manifest.append(meta)
-                with open(data_dir / f"meta_{run_id}.json", "w") as f:
-                    json.dump(meta, f, indent=2)
+        check = verify_parquet(dest)
+        print(f"    collected: {dest.name} -> {check}")
+
+        meta = {
+            "run_id": run_id,
+            "profile": profile,
+            "policy": policy,
+            "users": users,
+            "duration_s": args.duration,
+            "seed": args.seed,
+            "file": dest.name,
+            "started_at": sealed["path"],
+            "verified": check,
+        }
+        manifest.append(meta)
+        with open(data_dir / f"meta_{run_id}.json", "w") as f:
+            json.dump(meta, f, indent=2)
 
     elapsed = time.time() - started
     print("\n" + "=" * 68)

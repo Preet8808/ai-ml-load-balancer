@@ -238,6 +238,38 @@ def _apply_metrics_response(resp) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Fault injection control (used by the dataset driver's `degraded` profile)
+# ---------------------------------------------------------------------------
+
+_fault_error_rate = 0.0
+_fault_until = 0.0
+
+
+def _fault_active() -> bool:
+    """True if this request should be failed on purpose."""
+    if _fault_error_rate <= 0.0 or time.time() >= _fault_until:
+        return False
+    return random.random() < _fault_error_rate
+
+
+@app.get("/fault")
+async def fault(error_rate: float = 0.0, duration_s: float = 30.0):
+    """
+    Fail a fraction of requests for a while, so error-rate metrics carry real
+    information. Excluded from the application statistics like /metrics, so
+    control traffic cannot pollute the load the router is meant to observe.
+    """
+    global _fault_error_rate, _fault_until
+    _fault_error_rate = max(0.0, min(1.0, error_rate))
+    _fault_until = time.time() + max(0.0, duration_s)
+    return {
+        "id": BACKEND_ID,
+        "error_rate": _fault_error_rate,
+        "duration_s": duration_s,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Middleware: track inflight, latency, status for application traffic
 # ---------------------------------------------------------------------------
 
@@ -246,14 +278,30 @@ async def track_request(request: Request, call_next):
     global _inflight, _ewma_ms, _total_requests, _total_errors
 
     path = request.url.path
-    if path in ("/metrics", "/health"):
+    if path in ("/metrics", "/health", "/fault", "/slow"):
         return await call_next(request)
 
+    # Bookkeeping starts before the injected delay, so a degraded server also
+    # looks degraded in its own metrics (rt_ewma_ms up, inflight up). A fault
+    # that the router cannot observe teaches nothing: the whole point of the
+    # degraded scenario is that the state features reveal it.
     _inflight += 1
     started = time.perf_counter()
     status = 500
     try:
-        response = await call_next(request)
+        if _slow_active():
+            await asyncio.sleep(_slow_ms / 1000.0)
+
+        # Injected faults pass through the same bookkeeping as real requests,
+        # so error_rate_5s reflects them. Without this the feature is a
+        # constant zero and a router can never learn to avoid a failing server.
+        if _fault_active():
+            response = JSONResponse(
+                status_code=503,
+                content={"id": BACKEND_ID, "error": "injected fault"},
+            )
+        else:
+            response = await call_next(request)
         status = response.status_code
         return response
     finally:
@@ -375,11 +423,29 @@ async def payload(request: Request):
     return JSONResponse(content=data)
 
 
+_slow_ms = 0
+_slow_until = 0.0
+
+
+def _slow_active() -> bool:
+    return _slow_ms > 0 and time.time() < _slow_until
+
+
 @app.get("/slow")
-async def slow(ms: int = 500):
-    """Fault-injection helper: deliberately slow this backend for `ms`."""
-    await asyncio.sleep(max(0, ms) / 1000.0)
-    return {"id": BACKEND_ID, "type": "slow", "slept_ms": ms}
+async def slow(ms: int = 500, duration_s: float = 30.0):
+    """
+    Make this backend deliberately slow for a while.
+
+    This used to sleep for the duration of a single request, which is useless
+    as fault injection: it delayed one call and returned, so the router never
+    saw a sustained difference between servers and error_rate_5s stayed zero.
+    The sleep is now applied to every request inside the window, and the
+    control call itself returns immediately.
+    """
+    global _slow_ms, _slow_until
+    _slow_ms = max(0, ms)
+    _slow_until = time.time() + max(0.0, duration_s)
+    return {"id": BACKEND_ID, "slow_ms": _slow_ms, "duration_s": duration_s}
 
 
 @app.get("/metrics")

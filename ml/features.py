@@ -105,6 +105,14 @@ def build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     if "server_id" in df.columns:
         df = df[df["server_id"].astype(str).str.len() > 0]
 
+    # Failed requests are not observations of response time. A 503 returns
+    # quickly, so keeping them teaches the model that a failing server is a
+    # fast one - the opposite of what a router should learn. Errors stay in
+    # the logs and reach the model only through `err_rate_5s`.
+    if "status" in df.columns:
+        status = pd.to_numeric(df["status"], errors="coerce")
+        df = df[status < 400]
+
     target = pd.to_numeric(df[TARGET_COLUMN], errors="coerce")
     df = df[target.notna()]
     target = target.clip(upper=TARGET_CAP_MS)
