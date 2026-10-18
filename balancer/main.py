@@ -81,7 +81,18 @@ async def init():
     global client, algorithm_instance
     load_config()
     algorithm_instance = get_algorithm(ALGORITHM)
-    client = httpx.AsyncClient(timeout=30.0)
+
+    # Pool sizing matters here: httpx defaults to 100 connections shared
+    # across all backends. Anything above that queues inside client.request(),
+    # and the proxy then attributes that queueing to the backend's latency.
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(float(os.environ.get("PROXY_TIMEOUT_S", "30"))),
+        limits=httpx.Limits(
+            max_connections=int(os.environ.get("PROXY_MAX_CONNECTIONS", "500")),
+            max_keepalive_connections=int(os.environ.get("PROXY_MAX_KEEPALIVE", "500")),
+            keepalive_expiry=float(os.environ.get("PROXY_KEEPALIVE_EXPIRY_S", "60")),
+        ),
+    )
     
     if collector:
         await collector.start()
@@ -196,13 +207,15 @@ async def stats():
             "mem_limit_mb": s.mem_limit_mb,
             "healthy": s.healthy,
             "sent_since_snapshot": getattr(s, 'sent_since_snapshot', 0),
+            "inflight_local": getattr(s, 'inflight_local', 0),
             "metrics": s.metrics.__dict__ if s.metrics else None,
             "health_failures": getattr(s, 'health_check_failures', 0)
         })
     return {
-        "servers": result, 
+        "servers": result,
         "algorithm": ALGORITHM,
         "sla_ms": SLA_MS,
+        "inflight_total": sum(getattr(s, 'inflight_local', 0) for s in SERVERS),
     }
 
 

@@ -137,3 +137,98 @@ rejects the dataset unless:
 
 The last condition is the one that matters. Without it the pipeline happily
 reported success on a dataset where the features carried no information.
+
+---
+
+# Part 2 — Latency that was not the backend's fault
+
+Once the gate rejected the first corrected dataset (R² = 0.149), the next
+defect class turned up: latency the backend did not cause. Four separate
+mechanisms were adding seconds to every request while the backends sat idle.
+
+## The logger blocked the request path
+
+`RequestLogger.log()` acquired an `asyncio.Lock` and held it across the Parquet
+write. With ~200 concurrent proxy requests all queueing behind that lock and a
+20 ms write to the host bind mount, `/ping` — which the backend answers in
+microseconds — measured **2.6 s of pure logging latency**.
+
+Measured cost of a 50-row flush:
+
+| Target | mean | p95 | max |
+|---|---|---|---|
+| `/app/logs` (host bind mount) | 19.6 ms | 46.5 ms | 52.7 ms |
+| `/tmp` (container local) | 2.1 ms | 5.9 ms | 10.2 ms |
+
+*Fix:* `log()` now only appends to a list — atomic inside a single-threaded
+event loop — and the Parquet write runs in a worker thread. The request path
+takes no lock and performs no I/O.
+
+## The proxy connection pool was too small
+
+`httpx.AsyncClient` defaults to `max_connections=100` shared across all four
+backends. Everything above that queued inside `client.request()`, and because
+the proxy measures that wait, it attributed queueing to the backend.
+
+*Fix:* limits are configurable (`PROXY_MAX_CONNECTIONS`, default 500) with
+keepalive aligned to the pool.
+
+## CPU work starved the event loop
+
+`asyncio.to_thread` without a bound let many GIL-holding threads run at once.
+The backend's event loop then could not answer `/metrics`, so the only
+queue-depth signal a router could observe read a flat zero — which is exactly
+the signal a load balancer needs most.
+
+An intermediate attempt used a `ProcessPoolExecutor`, which removed the GIL
+contention but pushed poll latency to 1.5 s under load.
+
+*Fix:* CPU work is bounded by an `asyncio.Semaphore` whose width equals the
+container's CPU quota, mirroring a fixed worker pool. At most `CPU_WORKERS`
+threads ever hold the GIL, so the loop stays responsive while requests queue
+where a router can see them.
+
+## /cpu scaled its work with the CPU limit
+
+`/cpu` did `cpu_limit * 1000` iterations, so a 0.5-core backend did *less*
+work and answered *faster* — the exact opposite of the heterogeneity the
+project needs. *Fix:* constant work; the quota decides how long it takes.
+
+## Where the queue actually was
+
+With 200 concurrent users, instrumenting both sides at once settled it:
+
+```
+balancer inflight_total : mean=181.3  (min=175, max=187)
+backends inflight (sum) : mean=0.3
+balancer per-server     : [44, 49, 43, 44]
+gap (waiting in proxy)  : 181.0
+```
+
+One hundred and eighty-one requests were inside the balancer while the backends
+held three tenths of one request between them. `/ping`, which does no work, had
+the same latency as `/cpu`, which does 28 ms of work — the signature of a
+uniform queue rather than endpoint-specific cost.
+
+## Saturation curve
+
+Aggregate latency against concurrent users (in-container Locust, round robin):
+
+| Users | req/s | avg | median |
+|---|---|---|---|
+| 20 | 145 | 36 ms | 27 ms |
+| 40 | 118 | 224 ms | 180 ms |
+| 80 | 97 | 641 ms | 480 ms |
+| 200 | 87 | 1853 ms | 1400 ms |
+
+Throughput peaks near 20 users and then falls while latency climbs: the stack
+is CPU-bound and past roughly 80 concurrent users the proxy degrades without
+the backends getting busier. Dataset runs are therefore sized to 60–110 users
+so that server state, rather than proxy collapse, explains the latency.
+
+## Result
+
+After these fixes, the same signal test that scored 0.018 on the original
+dataset and 0.149 on the first corrected one now scores **R² ≈ 0.51–0.55 from
+server-state features alone**, with endpoint identity contributing essentially
+nothing (R² ≈ 0.000). The features describe load, not endpoint identity.

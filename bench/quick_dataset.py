@@ -43,13 +43,19 @@ POLICIES = ["round_robin", "least_conn", "random"]
 
 # Concurrency per profile. Chosen to saturate the 4.5 cores of cgroup quota
 # shared across the four backends, so CPU throttling and queueing appear.
+# Concurrency per profile, chosen from a measured saturation curve with the
+# load generator inside the compose network: 20 users -> 145 req/s at 36 ms,
+# 40 -> 118 req/s at 224 ms, 80 -> 97 req/s at 641 ms, 200 -> 87 req/s at
+# 1853 ms. Past roughly 80 concurrent the proxy queues requests while the
+# backends sit idle, which produces latency without producing a learnable
+# signal. These values keep each run partially loaded.
 PROFILE_USERS = {
-    "steady": 100,
-    "ramp": 150,
-    "burst": 200,
-    "wave": 120,
-    "mixed_cost": 140,
-    "degraded": 120,
+    "steady": 40,
+    "ramp": 60,
+    "burst": 80,
+    "wave": 55,
+    "mixed_cost": 60,
+    "degraded": 55,
 }
 PROFILE_SPAWN_RATE = 20
 PROFILE_WAIT = 5.0  # seconds of idle collection after sealing
@@ -71,28 +77,51 @@ def set_algorithm(policy: str) -> bool:
 
 
 def run_locust(profile: str, out_prefix: Path, duration: int, users: int) -> bool:
-    env = os.environ.copy()
-    env["TRAFFIC_PROFILE"] = profile
-    env["TRAFFIC_USERS"] = str(users)
-    env["BENCH_DURATION"] = str(duration)
-    env["SPAWN_RATE"] = str(PROFILE_SPAWN_RATE)
-    # Bound randomness so a rerun of the same cell is comparable
-    env["PYTHONHASHSEED"] = "0"
+    """
+    Drive load from inside the balancer container.
 
+    The load generator deliberately does NOT run on the Windows host. Driving
+    60+ concurrent connections through Docker Desktop's port forwarder roughly
+    halved throughput and doubled latency versus generating the load inside the
+    compose network, and that extra delay is an artefact of the host's network
+    stack rather than anything the load balancer controls. It would show up in
+    the labels and drown out the signal we are trying to measure.
+
+    Measured: 20 users -> 145 req/s at 36 ms from inside the container, versus
+    44 req/s at 791 ms for 60 users through the host port forwarder.
+    """
     cmd = [
-        sys.executable, "-m", "locust",
-        "-f", str(PROJECT_ROOT / "bench" / "traffic_profiles.py"),
-        "--host", BALANCER_URL,
+        "docker", "exec",
+        "-e", f"TRAFFIC_PROFILE={profile}",
+        "-e", f"TRAFFIC_USERS={users}",
+        "-e", f"BENCH_DURATION={duration}",
+        "-e", f"SPAWN_RATE={PROFILE_SPAWN_RATE}",
+        BALANCER_CONTAINER,
+        "python", "-m", "locust",
+        "-f", "bench/traffic_profiles.py",
+        "--host", "http://localhost:8080",
         "--headless",
         "-t", f"{duration + 30}s",
-        "--csv", str(out_prefix),
         "--only-summary",
-        "--loglevel", "WARNING",
+        "--loglevel", "ERROR",
     ]
-    print(f"    locust: profile={profile} users={users} {duration}s")
+    env = os.environ.copy()
+    env["PATH"] = DOCKER_BIN + os.pathsep + env.get("PATH", "")
+
+    print(f"    locust (in-network): profile={profile} users={users} {duration}s")
     try:
-        result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env, timeout=duration + 120)
-        return result.returncode == 0
+        result = subprocess.run(
+            cmd, cwd=PROJECT_ROOT, env=env,
+            timeout=duration + 150,
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"    WARNING: locust exited {result.returncode}")
+            tail = (result.stderr or result.stdout or "").strip().splitlines()[-3:]
+            for line in tail:
+                print(f"      {line}")
+            return False
+        return True
     except subprocess.TimeoutExpired:
         print("    locust exceeded timeout; stopping it")
         return False
@@ -211,6 +240,17 @@ def main():
     index = 0
     manifest = []
 
+    # A previous run may have died mid-load (Ctrl-C, killed process), leaving a
+    # writer installed on a file that has since been removed. Seal it up front
+    # so the first /admin/run does not inherit that state.
+    try:
+        pending = _post("/admin/seal").get("sealed")
+        if pending:
+            print(f"  recovered dangling run {pending.get('run_id')} "
+                  f"({pending.get('rows')} rows)")
+    except Exception as exc:
+        print(f"  WARNING: could not clear a pending run: {exc}")
+
     for profile in args.profiles:
         for policy in args.policies:
             for repeat in range(args.runs):
@@ -239,7 +279,7 @@ def main():
                     if slow_backend(args.fault_server, args.fault_ms):
                         print(f"    injected fault: {args.fault_server} +{args.fault_ms}ms")
 
-                run_locust(profile, csv_prefix, args.duration, users)
+                ok = run_locust(profile, csv_prefix, args.duration, users)
 
                 time.sleep(PROFILE_WAIT)
 
@@ -248,6 +288,9 @@ def main():
                 if not sealed:
                     print("    WARNING: nothing to seal")
                     continue
+
+                if sealed.get("error"):
+                    print(f"    WARNING: seal reported {sealed['error']}")
 
                 print(f"    sealed: {Path(sealed['path']).name} ({sealed['rows']} rows)")
 

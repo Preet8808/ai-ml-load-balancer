@@ -74,10 +74,15 @@ CPU_LIMIT = float(os.environ.get("BACKEND_CPUS") or _cgroup_cpu_limit())
 MEM_LIMIT_MB = float(os.environ.get("BACKEND_MEM") or _cgroup_mem_limit_mb())
 
 # CPU work per /cpu request. Constant work means a 0.5-core backend is
-# measurably slower than a 2-core backend for the same request. Calibrated so
-# the four backends' 4.5 cores of quota saturate at roughly 150-250 req/s,
-# which keeps samples per run high enough for the dataset target.
-CPU_WORK_ITERATIONS = int(os.environ.get("CPU_WORK_ITERATIONS", "150000"))
+# measurably slower than a 2-core backend for the same request.
+#
+# Sized so the stack lands in a partially-loaded regime across the bench:
+# measured aggregate latency was 36 ms at 20 users, 224 ms at 40, 641 ms at 80
+# and 1853 ms at 200. Past roughly 80 concurrent users the proxy collapses and
+# the balancer queues ~180 requests with the backends idle, which tells us
+# nothing about load. 80k iterations (~28 ms) keeps throughput near 200 req/s
+# while still saturating a backend's CPU quota.
+CPU_WORK_ITERATIONS = int(os.environ.get("CPU_WORK_ITERATIONS", "80000"))
 IO_BASE_MS = float(os.environ.get("IO_BASE_MS", "25"))
 
 # ---------------------------------------------------------------------------
@@ -271,6 +276,43 @@ def _burn(iterations: int) -> int:
     return total
 
 
+# CPU work is bounded by a semaphore whose width equals the container's CPU
+# quota. Requests beyond that wait asynchronously, which is what a fixed
+# worker pool does in a real server and is the contention a router should
+# route around.
+#
+# Threads, not processes: at most CPU_WORKERS of them ever hold the GIL, so
+# the event loop still gets scheduled and keeps answering /metrics. Unbounded
+# `to_thread` calls would instead starve the loop, and the queue-depth signal
+# a router depends on would read a flat zero.
+CPU_WORKERS = max(1, int(round(CPU_LIMIT)))
+_cpu_slots: Optional[asyncio.Semaphore] = None
+_cpu_queued = 0
+
+
+def _get_cpu_slots() -> asyncio.Semaphore:
+    global _cpu_slots
+    if _cpu_slots is None:
+        _cpu_slots = asyncio.Semaphore(CPU_WORKERS)
+    return _cpu_slots
+
+
+async def _run_cpu(iterations: int) -> int:
+    global _cpu_queued
+    slots = _get_cpu_slots()
+    _cpu_queued += 1
+    try:
+        async with slots:
+            return await asyncio.to_thread(_burn, iterations)
+    finally:
+        _cpu_queued -= 1
+
+
+def cpu_queue_depth() -> int:
+    """Requests waiting for a CPU worker slot."""
+    return max(0, _cpu_queued - CPU_WORKERS)
+
+
 # ---------------------------------------------------------------------------
 # Application endpoints
 # ---------------------------------------------------------------------------
@@ -290,8 +332,15 @@ async def ping():
 @app.get("/cpu")
 async def cpu():
     """CPU-bound request doing constant work, limited by the cgroup quota."""
-    result = await asyncio.to_thread(_burn, CPU_WORK_ITERATIONS)
-    return {"id": BACKEND_ID, "type": "cpu", "computation": result, "cpu_limit": CPU_LIMIT}
+    result = await _run_cpu(CPU_WORK_ITERATIONS)
+    return {
+        "id": BACKEND_ID,
+        "type": "cpu",
+        "computation": result,
+        "cpu_limit": CPU_LIMIT,
+        "workers": CPU_WORKERS,
+        "queue_depth": cpu_queue_depth(),
+    }
 
 
 @app.get("/io")
@@ -351,11 +400,13 @@ async def metrics():
         "net_io_bytes_recv": 0.0,
         "net_io_bytes_sent": 0.0,
         "inflight": _inflight,
+        "queue_depth": cpu_queue_depth(),
         "req_rate_5s": round(len(window) / WINDOW_S, 3),
         "rt_ewma_ms": round(_ewma_ms, 3),
         "rt_p95_5s_ms": round(_percentile(latencies, 95), 3),
         "error_rate_5s": round(errors / len(window), 4) if window else 0.0,
         "cpu_limit": CPU_LIMIT,
+        "cpu_workers": CPU_WORKERS,
         "mem_limit_mb": MEM_LIMIT_MB,
         "total_requests": _total_requests,
         "total_errors": _total_errors,
@@ -368,7 +419,7 @@ async def metrics():
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def catch_all(request: Request, path: str):
     """Catch-all for unknown routes."""
-    result = await asyncio.to_thread(_burn, CPU_WORK_ITERATIONS // 8)
+    result = await _run_cpu(CPU_WORK_ITERATIONS // 8)
     return {"id": BACKEND_ID, "path": path, "result": result}
 
 

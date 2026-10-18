@@ -181,3 +181,92 @@ async def test_collector_health_state_machine():
     assert server.healthy is False
 
     await collector.stop()
+
+
+# ---------------------------------------------------------------------------
+# Sealing must survive being disturbed
+# ---------------------------------------------------------------------------
+
+def _entry(ts: float = 1.0, server: str = "backend1") -> dict:
+    return {
+        "timestamp": ts, "req_type": "cpu", "payload_kb": 0.0,
+        "server_id": server, "srv_cpu_pct": 10.0, "srv_mem_pct": 20.0,
+        "inflight": 1, "req_rate_5s": 5.0, "rt_ewma_ms": 15.0,
+        "rt_p95_5s_ms": 25.0, "err_rate_5s": 0.0, "cpu_limit": 1.0,
+        "cpu_delta_5s": 0.5, "response_ms": 12.0, "status": 200,
+    }
+
+
+def test_file_size_reports_zero_for_a_missing_file(tmp_path):
+    from balancer.logger import _file_size
+
+    assert _file_size(None) == 0
+    assert _file_size(str(tmp_path / "not_here.parquet")) == 0
+
+    real = tmp_path / "here.parquet"
+    real.write_bytes(b"12345")
+    assert _file_size(str(real)) == 5
+
+
+@pytest.mark.asyncio
+async def test_seal_clears_the_writer_even_when_the_flush_fails(tmp_path, monkeypatch):
+    """
+    A failed seal must not wedge the logger.
+
+    Previously an exception escaped `seal()`, leaving the writer installed
+    while its file had been removed from the log directory. Every later
+    /admin/run then returned 500 and the collection run died after one run.
+    """
+    logger = RequestLogger(log_dir=str(tmp_path / "logs"), buffer_size=100, flush_interval=100)
+    await logger.start()
+    await logger.start_run("run_fail")
+    await logger.log(_entry())
+
+    async def boom():
+        raise OSError("log volume disappeared")
+
+    monkeypatch.setattr(logger, "_drain", boom)
+
+    info = await logger.seal()
+    assert info is not None
+    assert info["error"] is not None
+    assert logger.status()["current_file"] is None
+
+    # The next run must still be able to start and produce a readable file
+    monkeypatch.undo()
+    await logger.start_run("run_after")
+    await logger.log(_entry(ts=2.0))
+    sealed = await logger.seal()
+    assert sealed["rows"] == 1
+    assert sealed["error"] is None
+    assert pq.read_table(sealed["path"]).num_rows == 1
+
+    await logger.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_run_recovers_from_a_missing_previous_file(tmp_path):
+    """
+    Sealing a run whose file was moved out from under the writer must work.
+
+    The collection driver moves each sealed file into data/, so the path a
+    writer remembers can legitimately be gone by the time the next run starts.
+    """
+    logger = RequestLogger(log_dir=str(tmp_path / "logs"), buffer_size=100, flush_interval=100)
+    await logger.start()
+
+    await logger.start_run("run_moved")
+    await logger.log(_entry())
+
+    # Stand in for the file being relocated while the writer is still open
+    logger._file_path = str(tmp_path / "logs" / "already_moved.parquet")
+
+    info = await logger.start_run("run_next")
+    assert info["previous"] is not None
+    assert info["previous"]["bytes"] == 0
+
+    await logger.log(_entry(ts=3.0))
+    sealed = await logger.seal()
+    assert pq.read_table(sealed["path"]).num_rows == 1
+
+    await logger.stop()
