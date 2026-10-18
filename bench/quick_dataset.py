@@ -155,12 +155,18 @@ def run_generator(
     env_args: list[str] = []
     for key, value in (env or {}).items():
         env_args += ["-e", f"{key}={value}"]
+    # bench/ is mounted rather than taken from the image so that editing a
+    # traffic profile does not require rebuilding it. Read-only: the generator
+    # only ever reads its script. as_posix() because Docker wants forward
+    # slashes even for a Windows host path.
+    bench_mount = f"{PROJECT_ROOT.as_posix()}/bench:/app/bench:ro"
     return _docker(
         [
             "run", "--rm",
             "--network", balancer_network(),
             "--cpus", cpus or GENERATOR_CPUS,
             "--memory", GENERATOR_MEM,
+            "-v", bench_mount,
             *env_args,
             balancer_image(),
             *args,

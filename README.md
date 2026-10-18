@@ -16,11 +16,13 @@ A Layer-7 HTTP load balancer that uses machine learning to predict per-server re
 ## Quick Start
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies: the runtime requirements plus the ML stack, which
+# tests, the signal gate and training need (the service images install
+# requirements.txt only)
+pip install -r requirements-dev.txt
 
 # Run tests
-pytest
+python -m pytest
 
 # Start the full stack (requires Docker Compose)
 docker compose up

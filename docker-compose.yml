@@ -22,6 +22,12 @@ services:
       - ALGORITHM=round_robin
     volumes:
       - ./logs:/app/logs
+      # Live code, so a router change does not need an image rebuild. A rebuild
+      # installs every wheel with --no-cache-dir, which on a slow connection
+      # takes tens of minutes, and no measurement should have to wait for that.
+      # Read-only, so the container can never write back into the source tree.
+      - ./balancer:/app/balancer:ro
+      - ./ml:/app/ml:ro
     logging:
       driver: json-file
       options:

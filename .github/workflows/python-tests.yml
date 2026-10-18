@@ -25,11 +25,15 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Installed from requirements.txt rather than a hand-written list: the
-        # signal gate and the training tests both import scikit-learn, and an
-        # inline list that drifts from the real requirements turns a missing
+        # Installed from a requirements file rather than a hand-written list:
+        # the signal gate and the training tests both import scikit-learn, and
+        # an inline list that drifts from the real requirements turns a missing
         # dependency into a CI-only failure that looks like a broken test.
-        pip install -r requirements.txt
+        #
+        # requirements-dev.txt is requirements.txt plus the ML stack. CI runs
+        # the tests and the gate, so it wants the superset; the service images
+        # install requirements.txt only, since they never train a model.
+        pip install -r requirements-dev.txt
     - name: Run tests
       run: |
         # `python -m pytest` also puts the working directory on sys.path, so
