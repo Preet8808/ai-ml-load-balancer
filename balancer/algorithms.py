@@ -136,7 +136,7 @@ class LeastConnections(Algorithm):
         if not healthy:
             return None
 
-        server = min(healthy, key=lambda s: s.metrics.inflight_requests if s.metrics else 0)
+        server = min(healthy, key=lambda s: s.inflight)
         server.sent_since_snapshot += 1
 
         return ServerChoice(server=server, reason="least_conn")
@@ -159,9 +159,7 @@ class WeightedLeastConnections(Algorithm):
         if not healthy:
             return None
 
-        server = min(healthy, key=lambda s: (
-            s.metrics.inflight_requests / s.weight if s.metrics else 0
-        ))
+        server = min(healthy, key=lambda s: s.inflight / max(s.weight, 1e-6))
         server.sent_since_snapshot += 1
 
         return ServerChoice(server=server, reason="weighted_least_conn")

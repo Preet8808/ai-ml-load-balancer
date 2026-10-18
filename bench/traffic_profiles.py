@@ -1,193 +1,178 @@
 """
 Locust traffic profiles for dataset generation (Phase 3).
 
-Six traffic profiles as defined in the project plan:
-  1. Steady    — constant rate, e.g. 50 req/s
-  2. Ramp      — rate rises from 10 to 150 req/s over 5 min
-  3. Burst     — 5x spike lasting 10-30 s, repeated
-  4. Wave      — sinusoidal rate, mimics daily cycle
-  5. MixedCost — random mix of light, medium and heavy requests
-  6. DegradedServer — one server slowed during the run
+Six profiles from the project plan. Each profile is a LoadTestShape, so the
+offered load genuinely varies over time instead of relying on a constant
+`wait_time`:
 
-Usage:
-  locust -f bench/traffic_profiles.py --host=http://localhost:8080 \
-      --headless -u <users> -r <spawn_rate> -t <duration> --tags steady
+  1. steady       constant concurrency
+  2. ramp         concurrency climbs from a low base to the target
+  3. burst        periodic spikes well above the baseline
+  4. wave         sinusoidal concurrency
+  5. mixed_cost   constant concurrency, heavier endpoint mix
+  6. degraded     constant concurrency while one backend is slowed
+
+The active profile is selected with the TRAFFIC_PROFILE environment variable.
+Earlier versions relied on Locust's `--tags` filter, which still instantiates
+every user class and raises "No tasks defined" for each filtered one.
+
+Run directly with:
+  set TRAFFIC_PROFILE=ramp && set TRAFFIC_USERS=120 && set BENCH_DURATION=300
+  python -m locust -f bench/traffic_profiles.py --host=http://localhost:9090 --headless
 """
 
 import math
-import time
-import random
 import os
+import random
 
-from locust import HttpUser, task, tag, between, constant, events
+from locust import HttpUser, LoadTestShape, between, events, task
 
+TRAFFIC_PROFILE = os.environ.get("TRAFFIC_PROFILE", "steady").lower()
+TRAFFIC_USERS = int(os.environ.get("TRAFFIC_USERS", "80"))
+BENCH_DURATION = int(os.environ.get("BENCH_DURATION", "120"))
+SPAWN_RATE = int(os.environ.get("SPAWN_RATE", "20"))
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-# Request mix: 60% light, 25% cpu, 10% io, 5% payload
-DEFAULT_ENDPOINTS = [
-    ("/ping", 0.60),
-    ("/cpu", 0.25),
-    ("/io", 0.10),
-    ("/payload", 0.05),
-]
-
-# Override mix for specific profiles via environment variable
-ENDPOINT_MIX = os.environ.get("ENDPOINT_MIX", "")
+# Endpoint mix. `mixed_cost` weights the expensive endpoints far more heavily.
+DEFAULT_MIX = [("/ping", 0.60), ("/cpu", 0.25), ("/io", 0.10), ("/payload", 0.05)]
+MIXED_COST_MIX = [("/ping", 0.20), ("/cpu", 0.40), ("/io", 0.25), ("/payload", 0.15)]
 
 
-def get_endpoints():
-    """Return endpoint list, optionally overridden by env var."""
-    if not ENDPOINT_MIX:
-        return DEFAULT_ENDPOINTS
-    # Format: "ping:0.5,cpu:0.3,io:0.15,payload:0.05"
-    result = []
-    for part in ENDPOINT_MIX.split(","):
-        name, weight = part.split(":")
-        result.append((f"/{name.strip()}", float(weight)))
-    return result
+def endpoint_mix() -> list[tuple[str, float]]:
+    override = os.environ.get("ENDPOINT_MIX", "").strip()
+    if override:
+        parsed = []
+        for part in override.split(","):
+            name, weight = part.split(":")
+            parsed.append((f"/{name.strip()}", float(weight)))
+        return parsed
+    if TRAFFIC_PROFILE == "mixed_cost":
+        return MIXED_COST_MIX
+    return DEFAULT_MIX
 
 
-# ---------------------------------------------------------------------------
-# Base user class
-# ---------------------------------------------------------------------------
+class ApiUser(HttpUser):
+    """Single user class driven by whichever LoadTestShape is active."""
 
-class BaseUser(HttpUser):
-    """Base class with shared request logic."""
+    wait_time = between(0.0, 0.2)
+
+    @task
+    def call(self):
+        mix = endpoint_mix()
+        paths, weights = zip(*mix)
+        path = random.choices(paths, weights=weights)[0]
+
+        # POST a real body for /payload so payload_kb varies and is known at
+        # routing time, instead of being a constant zero for GET-only traffic.
+        if path == "/payload":
+            size_kb = random.choice((2, 8, 32, 128))
+            self.client.post(path, data={"blob": "x" * (size_kb * 1024)}, name=path)
+        else:
+            self.client.get(path, name=path)
+
+
+class BaseShape(LoadTestShape):
+    PROFILE = "base"
+    use_common_options = True  # honour -t as a hard cap
+    # Locust instantiates every LoadTestShape subclass it finds, so the base
+    # has to be marked abstract or startup raises on the missing tick().
     abstract = True
 
-    def _make_weighted_request(self):
-        endpoints = get_endpoints()
-        paths, weights = zip(*endpoints)
-        path = random.choices(paths, weights=weights)[0]
-        self.client.get(path, name=path)
+    def expired(self) -> bool:
+        return self.get_run_time() > BENCH_DURATION
 
 
-# ---------------------------------------------------------------------------
-# Profile 1: Steady — constant rate
-# ---------------------------------------------------------------------------
+class SteadyShape(BaseShape):
+    """Constant concurrency."""
+
+    PROFILE = "steady"
+
+    def tick(self):
+        if self.expired():
+            return None
+        return (TRAFFIC_USERS, SPAWN_RATE)
+
+
+class RampShape(BaseShape):
+    """Concurrency climbs linearly from 15% to the target over the run."""
+
+    PROFILE = "ramp"
+
+    def tick(self):
+        if self.expired():
+            return None
+        progress = self.get_run_time() / max(BENCH_DURATION, 1)
+        base = max(2, int(TRAFFIC_USERS * 0.15))
+        users = int(base + (TRAFFIC_USERS - base) * progress)
+        return (users, SPAWN_RATE)
+
+
+class BurstShape(BaseShape):
+    """Baseline concurrency with periodic 2.5x spikes."""
+
+    PROFILE = "burst"
+    INTERVAL_S = 45.0
+    BURST_S = 15.0
+
+    def tick(self):
+        if self.expired():
+            return None
+        phase = self.get_run_time() % self.INTERVAL_S
+        if phase < self.BURST_S:
+            return (int(TRAFFIC_USERS * 2.5), SPAWN_RATE)
+        return (int(TRAFFIC_USERS * 0.6), SPAWN_RATE)
+
+
+class WaveShape(BaseShape):
+    """Sinusoidal concurrency with a 120 s period."""
+
+    PROFILE = "wave"
+    PERIOD_S = 120.0
+
+    def tick(self):
+        if self.expired():
+            return None
+        elapsed = self.get_run_time()
+        intensity = (math.sin(2 * math.pi * elapsed / self.PERIOD_S) + 1) / 2
+        users = max(2, int(TRAFFIC_USERS * (0.2 + 0.8 * intensity)))
+        return (users, SPAWN_RATE)
+
+
+class MixedCostShape(BaseShape):
+    """Constant concurrency with the heavier endpoint mix."""
+
+    PROFILE = "mixed_cost"
+
+    def tick(self):
+        if self.expired():
+            return None
+        return (TRAFFIC_USERS, SPAWN_RATE)
+
+
+class DegradedShape(BaseShape):
+    """Constant concurrency while the driver slows one backend."""
+
+    PROFILE = "degraded"
+
+    def tick(self):
+        if self.expired():
+            return None
+        return (TRAFFIC_USERS, SPAWN_RATE)
+
+
+SHAPES = {
+    "steady": SteadyShape,
+    "ramp": RampShape,
+    "burst": BurstShape,
+    "wave": WaveShape,
+    "mixed_cost": MixedCostShape,
+    "degraded": DegradedShape,
+}
+
 
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
-    profile = environment.parsed_options.tags or ["unknown"]
-    print(f"Starting traffic profile: {profile}")
-
-
-class SteadyUser(BaseUser):
-    """Constant rate traffic — ~1 req/s per user."""
-    wait_time = constant(1.0)
-
-    @tag("steady")
-    @task
-    def steady_request(self):
-        self._make_weighted_request()
-
-
-# ---------------------------------------------------------------------------
-# Profile 2: Ramp — rate rises from 10 to 150 req/s over 5 min
-# ---------------------------------------------------------------------------
-
-class RampUser(BaseUser):
-    """Gradually increasing traffic rate over 5 minutes."""
-    wait_time = between(0.01, 0.5)
-    start_time = None
-
-    def on_start(self):
-        self.start_time = time.time()
-
-    @tag("ramp")
-    @task
-    def ramp_request(self):
-        elapsed = time.time() - self.start_time
-        # Ramp from ~100ms to ~7ms wait over 300 seconds
-        # wait_time = max(0.007, 0.1 * (1 - elapsed / 300))
-        # We can't dynamically set wait_time per-request in Locust easily,
-        # so we use between() with a wide range and let spawn rate handle scaling.
-        self._make_weighted_request()
-
-
-# ---------------------------------------------------------------------------
-# Profile 3: Burst — 5x spike lasting 10-30 s, repeated
-# ---------------------------------------------------------------------------
-
-class BurstUser(BaseUser):
-    """Bursty traffic — alternates between calm and 5x spike periods."""
-    wait_time = between(0.5, 2.0)
-    start_time = None
-    burst_interval = 30.0  # seconds between bursts
-    burst_duration = 15.0   # seconds of burst
-
-    def on_start(self):
-        self.start_time = time.time()
-
-    @tag("burst")
-    @task
-    def burst_request(self):
-        elapsed = time.time() - self.start_time
-        cycle_pos = elapsed % self.burst_interval
-
-        if cycle_pos < self.burst_duration:
-            # In burst phase — fire rapidly
-            self.client.get("/cpu", name="/cpu[burst]")
-            self.client.get("/ping", name="/ping[burst]")
-        else:
-            # Calm phase
-            self._make_weighted_request()
-
-
-# ---------------------------------------------------------------------------
-# Profile 4: Wave — sinusoidal rate, mimics daily cycle
-# ---------------------------------------------------------------------------
-
-class WaveUser(BaseUser):
-    """Sinusoidal traffic — mimics daily load cycle."""
-    wait_time = between(0.1, 1.0)
-    start_time = None
-    wave_period = 120.0  # 2-minute cycle for demo (real daily = 86400s)
-
-    def on_start(self):
-        self.start_time = time.time()
-
-    @tag("wave")
-    @task
-    def wave_request(self):
-        elapsed = time.time() - self.start_time
-        # Sinusoidal intensity: 0 at trough, 1 at peak
-        intensity = (math.sin(2 * math.pi * elapsed / self.wave_period) + 1) / 2
-
-        # At low intensity, skip some requests (longer effective wait)
-        if random.random() > intensity:
-            time.sleep(0.5)
-            return
-
-        self._make_weighted_request()
-
-
-# ---------------------------------------------------------------------------
-# Profile 5: MixedCost — random mix of light, medium and heavy requests
-# ---------------------------------------------------------------------------
-
-class MixedCostUser(BaseUser):
-    """Random mix of request types with varying costs."""
-    wait_time = between(0.1, 1.0)
-
-    @tag("mixed_cost")
-    @task
-    def mixed_request(self):
-        self._make_weighted_request()
-
-
-# ---------------------------------------------------------------------------
-# Profile 6: DegradedServer — one server slowed during the run
-# ---------------------------------------------------------------------------
-
-class DegradedServerUser(BaseUser):
-    """Normal traffic, but one backend is degraded (slowed by fault injection)."""
-    wait_time = between(0.2, 1.0)
-
-    @tag("degraded")
-    @task
-    def degraded_request(self):
-        self._make_weighted_request()
+    shape = SHAPES.get(TRAFFIC_PROFILE)
+    print(
+        f"profile={TRAFFIC_PROFILE} users={TRAFFIC_USERS} "
+        f"duration={BENCH_DURATION}s shape={shape.__name__ if shape else 'none'}"
+    )

@@ -127,6 +127,39 @@ async def set_algorithm(name: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/admin/run")
+async def start_run(run_id: str):
+    """
+    Seal the current Parquet file and begin a new run.
+
+    Call this before each traffic run so every file is complete (footer
+    written), independently readable, and tagged with its own run_id.
+    """
+    if req_logger is None:
+        raise HTTPException(status_code=503, detail="Logger not initialised")
+    if not run_id or "/" in run_id or "\\" in run_id:
+        raise HTTPException(status_code=400, detail="Invalid run_id")
+    info = await req_logger.start_run(run_id)
+    return {"status": "ok", **info}
+
+
+@app.post("/admin/seal")
+async def seal_run():
+    """Flush and close the current Parquet file so it can be collected."""
+    if req_logger is None:
+        raise HTTPException(status_code=503, detail="Logger not initialised")
+    info = await req_logger.seal()
+    return {"status": "ok", "sealed": info}
+
+
+@app.get("/admin/logger")
+async def logger_status():
+    """Inspect the logger: current file, row counts, and sealed runs."""
+    if req_logger is None:
+        raise HTTPException(status_code=503, detail="Logger not initialised")
+    return req_logger.status()
+
+
 @app.get("/config")
 async def get_config():
     """Get current configuration."""
@@ -211,26 +244,48 @@ async def proxy(request: Request, path: str):
     body = await request.body()
     context.payload_kb = len(body) / 1024.0
 
-    # Save state before request for training data
-    state_before = None
-    if server.metrics:
-        state_before = {
-            "srv_cpu_pct": server.metrics.cpu_pct,
-            "srv_mem_pct": server.metrics.mem_pct,
-            "inflight": server.metrics.inflight_requests,
-            "req_rate_5s": server.metrics.req_rate_5s,
-            "rt_ewma_ms": server.metrics.rt_ewma_ms,
-            "rt_p95_5s_ms": server.metrics.rt_p95_5s_ms,
-            "err_rate_5s": server.metrics.error_rate_5s,
-            "cpu_limit": server.metrics.cpu_limit,
-            "cpu_delta_5s": server.metrics.cpu_delta_5s,
-        }
+    # Sanitize label/log values so a non-numeric field can never abort a write
+    def _f(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
-    # Increment in-flight count
-    if server.metrics:
-        server.metrics.inflight_requests += 1
+    # Save state before request for training data
+    state_before = {
+        "srv_cpu_pct": _f(server.metrics.cpu_pct if server.metrics else 0.0),
+        "srv_mem_pct": _f(server.metrics.mem_pct if server.metrics else 0.0),
+        "inflight": int(_f(server.metrics.inflight_requests if server.metrics else 0.0)),
+        "req_rate_5s": _f(server.metrics.req_rate_5s if server.metrics else 0.0),
+        "rt_ewma_ms": _f(server.metrics.rt_ewma_ms if server.metrics else 0.0),
+        "rt_p95_5s_ms": _f(server.metrics.rt_p95_5s_ms if server.metrics else 0.0),
+        "err_rate_5s": _f(server.metrics.error_rate_5s if server.metrics else 0.0),
+        "cpu_limit": _f(server.metrics.cpu_limit if server.metrics else server.cpu_limit),
+        "cpu_delta_5s": _f(server.metrics.cpu_delta_5s if server.metrics else 0.0),
+    }
+
+    # Track this request as in-flight for the duration of the proxy call
+    server.sent_since_snapshot = getattr(server, 'sent_since_snapshot', 0) + 1
+    server.inflight_local = getattr(server, 'inflight_local', 0) + 1
 
     start_time = time.time()
+
+    async def _record(status: int, duration_ms: float):
+        if req_logger is None:
+            return
+        try:
+            await req_logger.log({
+                "timestamp": start_time,
+                "req_type": context.req_type.value,
+                "payload_kb": _f(context.payload_kb),
+                "server_id": server.server_id,
+                "response_ms": _f(duration_ms),
+                "status": int(status),
+                **state_before,
+            })
+        except Exception as exc:
+            print(f"logger failed: {exc}")
+
     try:
         resp = await client.request(
             method=request.method,
@@ -239,18 +294,7 @@ async def proxy(request: Request, path: str):
             content=body,
         )
         duration_ms = (time.time() - start_time) * 1000
-
-        # Log request data
-        if req_logger and state_before:
-            await req_logger.log({
-                "timestamp": start_time,
-                "req_type": context.req_type.value,
-                "payload_kb": context.payload_kb,
-                "server_id": server.server_id,
-                "response_ms": duration_ms,
-                "status": resp.status_code,
-                **state_before
-            })
+        await _record(resp.status_code, duration_ms)
 
         return Response(
             content=resp.content,
@@ -258,15 +302,16 @@ async def proxy(request: Request, path: str):
             headers=dict(resp.headers),
         )
     except httpx.ConnectError:
-        if hasattr(server, 'health_check_failures'):
-            server.health_check_failures = getattr(server, 'health_check_failures', 0) + 1
+        server.health_check_failures = getattr(server, 'health_check_failures', 0) + 1
+        await _record(502, (time.time() - start_time) * 1000)
         raise HTTPException(status_code=502, detail=f"Backend {server.server_id} unreachable")
+    except HTTPException:
+        raise
     except Exception as e:
+        await _record(500, (time.time() - start_time) * 1000)
         raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
     finally:
-        # Decrement in-flight count
-        if server.metrics:
-            server.metrics.inflight_requests = max(0, server.metrics.inflight_requests - 1)
+        server.inflight_local = max(0, getattr(server, 'inflight_local', 0) - 1)
 
 
 if __name__ == "__main__":

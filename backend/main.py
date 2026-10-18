@@ -1,42 +1,284 @@
 """Backend server that exposes /ping, /cpu, /io, /payload, and /health endpoints.
 
-This is the core application that will run inside Docker containers
-with different resource limits to create heterogeneity.
+The backend reports *real* resource usage and request statistics, which the
+balancer's metrics collector consumes and the ML models learn from:
+
+  - cpu_pct        : cgroup v2 CPU usage delta / (elapsed * cpu quota)
+  - mem_pct        : cgroup v2 memory.current / memory.max
+  - load_avg       : /proc/loadavg (1-minute)
+  - net_io_*       : /proc/net/dev byte counters, delta per second
+  - inflight       : requests currently being served
+  - req_rate_5s    : completed requests per second over the last 5 s
+  - rt_ewma_ms     : EWMA of observed response times for this server
+  - rt_p95_5s_ms   : p95 of observed response times over the last 5 s
+  - error_rate_5s  : share of 5xx responses over the last 5 s
+
+/metrics and /health are excluded from the application statistics so that
+monitoring traffic does not pollute the training data.
+
+Endpoints are deliberately heterogeneous under load:
+
+  - /cpu uses real CPU work, so cgroup throttling produces genuine queueing.
+  - /io sleeps proportionally to the number of concurrent requests on this
+    backend, simulating contention on a shared downstream dependency.
 """
 
 import asyncio
+import math
 import os
 import time
 import random
-from typing import Optional
+from collections import deque
+from pathlib import Path
+from typing import Deque, Optional, Tuple
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 app = FastAPI(title="Backend Server")
 
 BACKEND_ID = os.environ.get("BACKEND_ID", "1")
+CGROUP = Path("/sys/fs/cgroup")
 
-# Track metrics for this backend
-metrics_state = {
-    "cpu_pct": 0.0,
-    "mem_pct": 0.0,
-    "load_avg": 0.0,
-    "inflight": 0,
-    "req_rate_5s": 0.0,
-    "rt_ewma_ms": 0.0,
-    "rt_p95_5s_ms": 0.0,
-    "error_rate_5s": 0.0,
-    "net_io_bytes_per_s": 0.0,
-    "cpu_limit": float(os.environ.get("BACKEND_CPUS", "1.0")),
-    "mem_limit_mb": int(os.environ.get("BACKEND_MEM", "512")),
-}
+# ---------------------------------------------------------------------------
+# Capacity (set explicitly by docker-compose, else derived from cgroup limits)
+# ---------------------------------------------------------------------------
 
+def _cgroup_cpu_limit() -> float:
+    """Return the CPU quota in cores (e.g. 2.0) or the host CPU count."""
+    try:
+        quota, period = (CGROUP / "cpu.max").read_text().split()
+        if quota != "max":
+            return int(quota) / int(period)
+    except (OSError, ValueError):
+        pass
+    return float(os.cpu_count() or 1)
+
+
+def _cgroup_mem_limit_mb() -> float:
+    """Return the memory limit in MB, or total host memory."""
+    try:
+        raw = (CGROUP / "memory.max").read_text().strip()
+        if raw != "max":
+            return int(raw) / (1024 * 1024)
+    except (OSError, ValueError):
+        pass
+    try:
+        import psutil
+        return psutil.virtual_memory().total / (1024 * 1024)
+    except Exception:
+        return 512.0
+
+
+CPU_LIMIT = float(os.environ.get("BACKEND_CPUS") or _cgroup_cpu_limit())
+MEM_LIMIT_MB = float(os.environ.get("BACKEND_MEM") or _cgroup_mem_limit_mb())
+
+# CPU work per /cpu request. Constant work means a 0.5-core backend is
+# measurably slower than a 2-core backend for the same request. Calibrated so
+# the four backends' 4.5 cores of quota saturate at roughly 150-250 req/s,
+# which keeps samples per run high enough for the dataset target.
+CPU_WORK_ITERATIONS = int(os.environ.get("CPU_WORK_ITERATIONS", "150000"))
+IO_BASE_MS = float(os.environ.get("IO_BASE_MS", "25"))
+
+# ---------------------------------------------------------------------------
+# Request statistics (application traffic only)
+# ---------------------------------------------------------------------------
+
+WINDOW_S = 5.0
+EVENT_BUFFER = 20000
+
+_events: Deque[Tuple[float, float, int]] = deque(maxlen=EVENT_BUFFER)
+_inflight = 0
+_ewma_ms = 0.0
+_ewma_alpha = 0.15
+_total_requests = 0
+_total_errors = 0
+_started_at = time.time()
+
+# Resource sampling state
+_last_cpu_usec: Optional[int] = None
+_last_cpu_sample_ts: Optional[float] = None
+_last_net_bytes: Optional[int] = None
+_last_net_sample_ts: Optional[float] = None
+
+
+def _read_cpu_usec() -> Optional[int]:
+    """Total CPU time consumed by this cgroup, in microseconds."""
+    try:
+        for line in (CGROUP / "cpu.stat").read_text().splitlines():
+            if line.startswith("usage_usec"):
+                return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        import psutil
+        proc = psutil.Process()
+        cpu = proc.cpu_times()
+        return int((cpu.user + cpu.system) * 1_000_000)
+    except Exception:
+        return None
+
+
+def _read_mem_pct() -> float:
+    """Memory utilisation as a percentage of the container limit."""
+    try:
+        current = int((CGROUP / "memory.current").read_text().strip())
+        limit_raw = (CGROUP / "memory.max").read_text().strip()
+        if limit_raw != "max":
+            limit = int(limit_raw)
+            if limit > 0:
+                return min(100.0, current / limit * 100.0)
+    except (OSError, ValueError):
+        pass
+    try:
+        import psutil
+        return psutil.virtual_memory().percent
+    except Exception:
+        return 0.0
+
+
+def _read_net_bytes() -> Optional[int]:
+    """Total bytes received + sent across all interfaces."""
+    try:
+        total = 0
+        with open("/proc/net/dev", "r") as f:
+            for line in f.readlines()[2:]:
+                fields = line.split()
+                if len(fields) >= 10:
+                    total += int(fields[1]) + int(fields[9])
+        return total
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _read_load_avg() -> float:
+    try:
+        return float(Path("/proc/loadavg").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        try:
+            import psutil
+            return psutil.getloadavg()[0]
+        except Exception:
+            return 0.0
+
+
+def _cpu_pct_sample() -> float:
+    """CPU utilisation since the previous sample, normalised by the quota."""
+    global _last_cpu_usec, _last_cpu_sample_ts
+
+    now = time.time()
+    usec = _read_cpu_usec()
+    if usec is None:
+        return 0.0
+
+    if _last_cpu_usec is None or _last_cpu_sample_ts is None:
+        _last_cpu_usec, _last_cpu_sample_ts = usec, now
+        return 0.0
+
+    elapsed = now - _last_cpu_sample_ts
+    if elapsed <= 0:
+        return 0.0
+
+    delta_usec = max(0, usec - _last_cpu_usec)
+    _last_cpu_usec, _last_cpu_sample_ts = usec, now
+
+    # CPU-seconds consumed / wall-seconds / cores available
+    utilisation = (delta_usec / 1_000_000.0) / elapsed / max(CPU_LIMIT, 1e-6) * 100.0
+    return max(0.0, min(100.0, utilisation))
+
+
+def _net_io_bytes_per_s() -> float:
+    global _last_net_bytes, _last_net_sample_ts
+
+    now = time.time()
+    total = _read_net_bytes()
+    if total is None:
+        return 0.0
+
+    if _last_net_bytes is None or _last_net_sample_ts is None:
+        _last_net_bytes, _last_net_sample_ts = total, now
+        return 0.0
+
+    elapsed = now - _last_net_sample_ts
+    if elapsed <= 0:
+        return 0.0
+
+    delta = max(0, total - _last_net_bytes)
+    _last_net_bytes, _last_net_sample_ts = total, now
+    return delta / elapsed
+
+
+def _window_events() -> list[Tuple[float, float, int]]:
+    cutoff = time.time() - WINDOW_S
+    # deque is chronological; walk from the right until we leave the window
+    out = []
+    for ev in reversed(_events):
+        if ev[0] < cutoff:
+            break
+        out.append(ev)
+    return out
+
+
+def _percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, math.ceil(p / 100.0 * len(ordered)) - 1))
+    return ordered[idx]
+
+
+def _apply_metrics_response(resp) -> None:
+    """Set the no-store cache header so proxies never reuse stats."""
+    resp.headers["cache-control"] = "no-store"
+
+
+# ---------------------------------------------------------------------------
+# Middleware: track inflight, latency, status for application traffic
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def track_request(request: Request, call_next):
+    global _inflight, _ewma_ms, _total_requests, _total_errors
+
+    path = request.url.path
+    if path in ("/metrics", "/health"):
+        return await call_next(request)
+
+    _inflight += 1
+    started = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        _inflight = max(0, _inflight - 1)
+        if _inflight == 0 and _total_requests == 0:
+            _ewma_ms = latency_ms
+        else:
+            _ewma_ms = _ewma_alpha * latency_ms + (1 - _ewma_alpha) * _ewma_ms
+        _events.append((time.time(), latency_ms, status))
+        _total_requests += 1
+        if status >= 500:
+            _total_errors += 1
+
+
+def _burn(iterations: int) -> int:
+    total = 0
+    for i in range(iterations):
+        total += i * i
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Application endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health():
-    """Health check endpoint - always returns healthy unless explicitly marked."""
-    return {"status": "healthy", "id": BACKEND_ID, "cpu_pct": metrics_state["cpu_pct"]}
+    """Health check endpoint used by Docker and the balancer."""
+    return {"status": "healthy", "id": BACKEND_ID, "cpu_limit": CPU_LIMIT}
 
 
 @app.get("/ping")
@@ -47,54 +289,86 @@ async def ping():
 
 @app.get("/cpu")
 async def cpu():
-    """CPU-bound request - does computation proportional to backend capacity."""
-    # Simulate work based on CPU limit - limited servers do less work
-    cpu_work = int(metrics_state["cpu_limit"] * 1000)
-    result = sum(i * i for i in range(cpu_work))
-    # Update metrics
-    metrics_state["cpu_pct"] = min(100.0, metrics_state["cpu_pct"] + 5.0)
-    metrics_state["inflight"] = max(0, metrics_state["inflight"] - 1)
-    return {"id": BACKEND_ID, "type": "cpu", "computation": result, "cpu_limit": metrics_state["cpu_limit"]}
+    """CPU-bound request doing constant work, limited by the cgroup quota."""
+    result = await asyncio.to_thread(_burn, CPU_WORK_ITERATIONS)
+    return {"id": BACKEND_ID, "type": "cpu", "computation": result, "cpu_limit": CPU_LIMIT}
 
 
 @app.get("/io")
 async def io():
-    """I/O-bound request - simulates database wait with async sleep."""
-    # Wait time varies based on backend capacity
-    wait_ms = int(50 / metrics_state["cpu_limit"]) if metrics_state["cpu_limit"] > 0 else 50
+    """I/O-bound request whose wait grows with concurrency on this backend.
+
+    Real downstream contention (a shared database, say) makes latency depend
+    on how many requests this server is already handling, which is exactly
+    the signal a load-aware router should react to.
+    """
+    concurrency = max(1, _inflight)
+    # Square-root growth: 1 request -> base, 4 -> 2x, 9 -> 3x, capped at 6x
+    contention = min(6.0, math.sqrt(concurrency))
+    jitter = random.uniform(0.9, 1.1)
+    wait_ms = IO_BASE_MS * contention * jitter / max(CPU_LIMIT ** 0.25, 0.6)
     await asyncio.sleep(wait_ms / 1000.0)
-    # Update metrics
-    metrics_state["mem_pct"] = min(100.0, metrics_state["mem_pct"] + 3.0)
-    return {"id": BACKEND_ID, "type": "io", "waited_ms": wait_ms, "cpu_limit": metrics_state["cpu_limit"]}
+    return {
+        "id": BACKEND_ID,
+        "type": "io",
+        "waited_ms": round(wait_ms, 2),
+        "inflight": concurrency,
+        "cpu_limit": CPU_LIMIT,
+    }
 
 
 @app.get("/payload")
-async def payload():
-    """Heavy response - returns large JSON payload."""
-    item_count = int(100 * metrics_state["cpu_limit"])
+@app.post("/payload")
+async def payload(request: Request):
+    """Heavy response - returns a large JSON payload."""
+    item_count = int(os.environ.get("PAYLOAD_ITEMS", "2000"))
     data = {"id": BACKEND_ID, "items": list(range(item_count))}
     return JSONResponse(content=data)
 
 
+@app.get("/slow")
+async def slow(ms: int = 500):
+    """Fault-injection helper: deliberately slow this backend for `ms`."""
+    await asyncio.sleep(max(0, ms) / 1000.0)
+    return {"id": BACKEND_ID, "type": "slow", "slept_ms": ms}
+
+
 @app.get("/metrics")
 async def metrics():
-    """Internal metrics endpoint - exposed to load balancer."""
-    # Update some state to simulate real-world changes
-    metrics_state["req_rate_5s"] = random.uniform(10, 100)
-    metrics_state["error_rate_5s"] = random.uniform(0, 0.02)
-    metrics_state["load_avg"] = random.uniform(0.1, 2.0)
-    metrics_state["net_io_bytes_per_s"] = random.uniform(1000, 10000)
-    return JSONResponse(content={
+    """Internal metrics endpoint consumed by the balancer every second."""
+    window = _window_events()
+    latencies = [ev[1] for ev in window]
+    errors = sum(1 for ev in window if ev[2] >= 500)
+
+    body = {
         "backend_id": BACKEND_ID,
         "timestamp": time.time(),
-        **metrics_state,
-    })
+        "uptime_s": round(time.time() - _started_at, 1),
+        "cpu_pct": round(_cpu_pct_sample(), 2),
+        "mem_pct": round(_read_mem_pct(), 2),
+        "load_avg": round(_read_load_avg(), 3),
+        "net_io_bytes_per_s": round(_net_io_bytes_per_s(), 1),
+        "net_io_bytes_recv": 0.0,
+        "net_io_bytes_sent": 0.0,
+        "inflight": _inflight,
+        "req_rate_5s": round(len(window) / WINDOW_S, 3),
+        "rt_ewma_ms": round(_ewma_ms, 3),
+        "rt_p95_5s_ms": round(_percentile(latencies, 95), 3),
+        "error_rate_5s": round(errors / len(window), 4) if window else 0.0,
+        "cpu_limit": CPU_LIMIT,
+        "mem_limit_mb": MEM_LIMIT_MB,
+        "total_requests": _total_requests,
+        "total_errors": _total_errors,
+    }
+    response = JSONResponse(content=body)
+    response.headers["cache-control"] = "no-store"
+    return response
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def catch_all(request: Request, path: str):
     """Catch-all for unknown routes."""
-    result = sum(i * i for i in range(5000))
+    result = await asyncio.to_thread(_burn, CPU_WORK_ITERATIONS // 8)
     return {"id": BACKEND_ID, "path": path, "result": result}
 
 

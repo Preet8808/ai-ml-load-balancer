@@ -55,6 +55,8 @@ class ServerMetrics:
     cpu_delta_5s: float     # change in CPU over last 5 s (trend)
     healthy: bool = True
     stale: bool = False     # True if snapshot is older than 3 s
+    # Latency of the /metrics poll itself. Diagnostic only — never a feature.
+    poll_latency_ms: float = 0.0
 
 
 @dataclass
@@ -73,6 +75,9 @@ class ServerInfo:
     sent_since_snapshot: int = 0
     health_check_failures: int = 0
     health_check_successes: int = 0
+    # Requests currently being proxied to this server. Maintained by the proxy
+    # between collector polls, which report a value that is up to a second old.
+    inflight_local: int = 0
 
     @property
     def healthy(self) -> bool:
@@ -81,6 +86,16 @@ class ServerInfo:
             and self.metrics.healthy
             and not self.metrics.stale
         )
+
+    @property
+    def inflight(self) -> int:
+        """
+        Best available in-flight count: the proxy's own up-to-date counter,
+        falling back to the backend-reported (up to 1 s old) value.
+        """
+        if self.inflight_local > 0:
+            return self.inflight_local
+        return self.metrics.inflight_requests if self.metrics else 0
 
 
 @dataclass
