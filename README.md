@@ -101,16 +101,20 @@ without restarting anything.
 
 ```bash
 docker compose up -d                                   # dashboard at localhost:9090
-python ml/train.py --data data --output models         # writes models/*.joblib
 curl -X POST "http://localhost:9090/admin/algorithm?name=ml"
 ```
+
+The trained artifacts are committed, so `ml` works on a fresh clone. `data/` is
+not committed (20 MB of Parquet, rebuilt by the collector); after collecting
+your own, retrain with `python ml/train.py --data data --output models`.
 
 `/stats` reports the model's serving state too, so a real prediction-driven run
 can be told apart from one that silently fell back to a heuristic:
 
 ```json
 "ml": {"loaded": true, "artifact": "xgboost_032d9bab9a.joblib",
-       "estimator": "XGBRegressor", "decisions": 4213, "fallbacks": 0}
+       "estimator": "XGBRegressor", "decisions": 4213, "fallbacks": 0,
+       "decision_ms_mean": 1.38, "decision_ms_max": 9.54}
 ```
 
 With no artifact present, or one that cannot be loaded, the router keeps
@@ -130,6 +134,19 @@ balancer's own Parquet log - the same rows the dataset is built from - and the
 routing distribution is read from `server_id`, so "which server got the
 traffic" is measured rather than assumed.
 
+`mixed_cost`, 24 users, three repeats:
+
+| policy | req/s | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|
+| least_conn | 161 | 33 ms | 100 ms | 178 ms |
+| ml | 135 | 56 ms | 133 ms | 212 ms |
+| round_robin | 77 | 35 ms | 1205 ms | 2823 ms |
+
+The learned router beats the plan's round-robin baseline by about 9x on p95 and
+1.7x on throughput, and loses to least_conn by about 40% on p95. Both held in
+every repeat. `docs/serving.md` explains why, and documents the herding bug the
+first serving version had and the queue correction that fixed it.
+
 ## Milestones
 
 | Milestone | Week | Focus | Status |
@@ -139,13 +156,14 @@ traffic" is measured rather than assumed.
 | M3 | 5 | Live metrics and logs flowing | done |
 | M4 | 6 | Dataset v1 (200k+ rows) | done - 218,011 rows, 18 cells |
 | M5 | 8 | Model beats naive baseline by 30%+ MAE | done - +53.9% (XGBoost) |
-| M6 | 9 | MVP: ML balancer demo | in progress |
+| M6 | 9 | MVP: ML balancer demo | done - ml beats round_robin 9x on p95; least_conn still ahead |
 | M7 | 11 | Feature freeze, all tests green | planned |
 | M8 | 12 | Raw results complete | planned |
 | M9 | 14 | Final submission | planned |
 
 See `docs/dataset.md` for the per-cell table, the signal gate, the model
-comparison and the M5 verdict.
+comparison and the M5 verdict, and `docs/serving.md` for the serving path and
+the A/B evidence.
 
 ## License
 MIT

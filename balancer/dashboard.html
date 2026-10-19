@@ -165,6 +165,7 @@ function renderMl(s) {
     <div><span>artifact</span> ${ml.artifact || "—"}</div>
     <div><span>estimator</span> ${ml.estimator || "—"}</div>
     <div><span>decisions</span> ${ml.decisions}</div>
+    <div><span>decision cost</span> ${ml.decision_ms_mean != null ? ml.decision_ms_mean.toFixed(2) + " ms avg" : "—"}</div>
     <div><span>fallbacks</span>
       <b style="color:${ml.fallbacks ? "#ffb020" : "inherit"}">${ml.fallbacks}</b>
       ${ml.load_error ? `(${ml.load_error})` : ""}</div>

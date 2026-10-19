@@ -15,12 +15,18 @@ import json
 
 import joblib
 import numpy as np
+import pandas as pd
 import pytest
 
 from balancer.algorithms import algorithm_names, get_algorithm
 from balancer.interfaces import RequestContext, RequestType, ServerInfo, ServerMetrics
 from balancer.ml_router import MLRouter, find_artifact
-from ml.features import FEATURE_COLUMNS, to_ms
+from ml.features import (
+    FEATURE_COLUMNS,
+    build_serving_array,
+    build_serving_matrix,
+    to_ms,
+)
 
 
 class FakeModel:
@@ -57,7 +63,11 @@ def make_metrics(server_id: str, inflight: int = 0, rt_ewma_ms: float = 50.0) ->
     )
 
 
-def make_server(server_id: str, inflight: int = 0, rt_ewma_ms: float = 50.0) -> ServerInfo:
+def make_server(
+    server_id: str,
+    inflight: int = 0,
+    rt_ewma_ms: float = 50.0,
+) -> ServerInfo:
     return ServerInfo(
         server_id=server_id,
         host=f"host-{server_id}",
@@ -113,20 +123,57 @@ def test_picks_the_server_with_the_lowest_prediction(tmp_path):
     assert router.fallbacks == 0
 
 
-def test_frame_handed_to_the_model_keeps_the_training_column_order(tmp_path):
+def test_matrix_handed_to_the_model_keeps_the_training_column_order(tmp_path):
     router = make_router(tmp_path, predictions=[1.0, 2.0])
     servers = [make_server("s1"), make_server("s2")]
 
     router.choose_server(make_request(RequestType.PAYLOAD, payload_kb=32.0), servers)
 
-    frame = router.model.frame
-    assert list(frame.columns) == FEATURE_COLUMNS
+    # The estimator is handed a matrix in FEATURE_COLUMNS order, not a frame;
+    # naming the columns back is how the order is checked.
+    frame = pd.DataFrame(router.model.frame, columns=FEATURE_COLUMNS)
     assert len(frame) == 2, "one row per candidate server"
     # The request's own attributes must reach the model, not defaults: a
     # payload request that arrives as payload_kb=0 with all req_type dummies
     # at zero is the training/serving mismatch this asserts against.
     assert frame["payload_kb"].iloc[0] == 32.0
     assert frame["req_type_payload"].iloc[0] == 1.0
+
+
+def test_named_and_array_serving_transforms_agree():
+    # Two representations, one transform: the router uses the array path for
+    # speed, the training-side checks use the frame. They must not drift.
+    servers = [
+        make_server("s1", inflight=2, rt_ewma_ms=41.0),
+        make_server("s2", inflight=0, rt_ewma_ms=170.0),
+    ]
+
+    matrix = build_serving_matrix("cpu", 8.0, servers)
+    array = build_serving_array("cpu", 8.0, servers)
+
+    assert list(matrix.columns) == FEATURE_COLUMNS
+    assert np.array_equal(matrix.to_numpy(), array)
+
+
+def test_outstanding_work_outweighs_a_slightly_better_prediction(tmp_path):
+    # The model's inputs are one collector interval old. A backend that has
+    # picked up in-flight work since then will be slower than its prediction,
+    # so the queue is charged against it.
+    router = make_router(tmp_path, predictions=[2.0, 2.5])
+    servers = [make_server("busy", inflight=2), make_server("idle", inflight=0)]
+
+    choice = router.choose_server(make_request(), servers)
+
+    assert choice.server.server_id == "idle"
+    assert "inflight 0" in choice.reason
+
+
+def test_decision_time_is_reported_after_a_decision(tmp_path):
+    router = make_router(tmp_path, predictions=[1.0])
+
+    assert router.status()["decision_ms_mean"] is None
+    router.choose_server(make_request(), [make_server("s1")])
+    assert router.status()["decision_ms_mean"] is not None
 
 
 def test_prediction_is_reported_in_milliseconds(tmp_path):
