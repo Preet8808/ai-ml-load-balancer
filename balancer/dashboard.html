@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<!--
+  Live dashboard for the AI/ML load balancer.
+
+  Served by the balancer itself at / and refreshed from /stats once a second.
+  Everything is inline: the demo runs on a laptop with no internet, and a CDN
+  font or chart library would be the first thing to fail in front of an
+  audience. The algorithm switcher posts to /admin/algorithm, so the effect of
+  a routing policy on the same traffic can be shown live.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI/ML Load Balancer</title>
+<style>
+  :root {
+    --bg: #0f1218;
+    --panel: #171b24;
+    --panel-2: #1e2430;
+    --line: #2a3140;
+    --text: #e6ebf2;
+    --muted: #8b97a8;
+    --accent: #4da3ff;
+    --good: #3ecf8e;
+    --warn: #ffb020;
+    --bad: #ff5d5d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  h1 { font-size: 19px; margin: 0 0 2px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tiles { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+  .tile {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 14px; min-width: 108px;
+  }
+  .tile .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  .tile .v { font-size: 21px; font-weight: 600; margin-top: 2px; }
+  .server {
+    flex: 1 1 230px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 13px 15px;
+  }
+  .server.down { border-color: #5a2b2b; }
+  .shead { display: flex; justify-content: space-between; align-items: baseline; }
+  .sname { font-weight: 600; font-size: 15px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; }
+  .badge.ok { background: rgba(62,207,142,.15); color: var(--good); }
+  .badge.off { background: rgba(255,93,93,.15); color: var(--bad); }
+  .metrics { margin-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
+  .metrics .k { color: var(--muted); }
+  .metrics .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; margin-top: 9px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
+  .bar.cpu > i.hot { background: var(--warn); }
+  .bar.cpu > i.crit { background: var(--bad); }
+  .picker { display: flex; flex-wrap: wrap; gap: 7px; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 13px; cursor: pointer; font: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); border-color: var(--accent); color: #08121f; font-weight: 600; }
+  .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 9px; }
+  .mlrow { display: flex; gap: 22px; flex-wrap: wrap; }
+  .mlrow div span { color: var(--muted); }
+  #status { color: var(--muted); font-size: 12px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; }
+  .dot.off { background: var(--bad); }
+</style>
+</head>
+<body>
+
+<h1>AI/ML Load Balancer</h1>
+<div class="sub">
+  Live routing state from <code>/stats</code>, refreshed every second.
+  <span id="status"><span class="dot"></span>connecting…</span>
+</div>
+
+<div class="panel" style="margin-bottom:14px">
+  <div class="label">Routing algorithm <span style="text-transform:none;letter-spacing:0">— switch it and watch the same traffic re-route</span></div>
+  <div class="picker" id="picker"></div>
+</div>
+
+<div class="tiles" id="tiles"></div>
+
+<div class="panel" id="mlpanel" style="margin-bottom:14px; display:none">
+  <div class="label">Model serving</div>
+  <div class="mlrow" id="mlrow"></div>
+</div>
+
+<div class="row" id="servers"></div>
+
+<script>
+const POLL_MS = 1000;
+let algorithm = null;
+
+function tile(key, value, colour) {
+  return `<div class="tile"><div class="k">${key}</div>
+          <div class="v" ${colour ? `style="color:${colour}"` : ""}>${value}</div></div>`;
+}
+
+function renderTiles(s) {
+  const servers = s.servers;
+  const healthy = servers.filter(x => x.healthy).length;
+  const inflight = servers.reduce((a, x) => a + (x.inflight_local || 0), 0);
+  const rate = servers.reduce((a, x) => a + ((x.metrics && x.metrics.req_rate_5s) || 0), 0);
+  const cpu = servers.reduce((a, x) => a + ((x.metrics && x.metrics.cpu_pct) || 0), 0) / servers.length;
+  const errs = servers.reduce((a, x) => a + ((x.metrics && x.metrics.error_rate_5s) || 0), 0) / servers.length;
+
+  document.getElementById("tiles").innerHTML =
+    tile("healthy", `${healthy} / ${servers.length}`, healthy === servers.length ? null : "#ffb020") +
+    tile("in flight", inflight) +
+    tile("req/s (5 s)", rate.toFixed(0)) +
+    tile("mean cpu", cpu.toFixed(1) + "%") +
+    tile("mean errors", (errs * 100).toFixed(2) + "%", errs > 0.05 ? "#ff5d5d" : null);
+}
+
+function renderServers(s) {
+  const html = s.servers.map(x => {
+    const m = x.metrics || {};
+    const cpu = m.cpu_pct || 0;
+    // cpu_pct is already relative to the server's own quota, so the quota is
+    // shown next to it: "23% of 0.80" is the honest form of "23% busy".
+    const quota = m.cpu_limit || x.cpu_limit || 0;
+    const cls = cpu > 85 ? "crit" : cpu > 65 ? "hot" : "";
+    const sent = x.sent_since_snapshot || 0;
+    return `<div class="server ${x.healthy ? "" : "down"}">
+      <div class="shead">
+        <span class="sname">${x.server_id}</span>
+        <span class="badge ${x.healthy ? "ok" : "off"}">${x.healthy ? "healthy" : "down"}</span>
+      </div>
+      <div class="metrics">
+        <span class="k">cpu / limit</span><span class="v">${cpu.toFixed(1)}% of ${quota.toFixed(2)}</span>
+        <span class="k">memory</span><span class="v">${(m.mem_pct || 0).toFixed(1)}%</span>
+        <span class="k">in flight</span><span class="v">${x.inflight_local || 0}</span>
+        <span class="k">routed this second</span><span class="v">${sent}</span>
+        <span class="k">request rate</span><span class="v">${(m.req_rate_5s || 0).toFixed(1)}/s</span>
+        <span class="k">rt ewma</span><span class="v">${(m.rt_ewma_ms || 0).toFixed(0)} ms</span>
+        <span class="k">rt p95 (5 s)</span><span class="v">${(m.rt_p95_5s_ms || 0).toFixed(0)} ms</span>
+        <span class="k">errors</span><span class="v">${((m.error_rate_5s || 0) * 100).toFixed(2)}%</span>
+      </div>
+      <div class="bar cpu"><i class="${cls}" style="width:${Math.min(cpu, 100)}%"></i></div>
+    </div>`;
+  }).join("");
+  document.getElementById("servers").innerHTML = html;
+}
+
+function renderMl(s) {
+  const panel = document.getElementById("mlpanel");
+  const ml = s.ml;
+  if (!ml) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  const serving = ml.loaded && ml.fallbacks === 0;
+  document.getElementById("mlrow").innerHTML = `
+    <div><span>artifact</span> ${ml.artifact || "—"}</div>
+    <div><span>estimator</span> ${ml.estimator || "—"}</div>
+    <div><span>decisions</span> ${ml.decisions}</div>
+    <div><span>fallbacks</span>
+      <b style="color:${ml.fallbacks ? "#ffb020" : "inherit"}">${ml.fallbacks}</b>
+      ${ml.load_error ? `(${ml.load_error})` : ""}</div>
+    <div><span>trained on</span> ${ml.trained_on || "—"} (${ml.train_rows ? ml.train_rows.toLocaleString() + " rows" : "—"})</div>
+    <div><span>status</span>
+      <b style="color:${serving ? "#3ecf8e" : ml.loaded ? "#ffb020" : "#ff5d5d"}">
+        ${serving ? "predictions drive routing" : ml.loaded ? "predicting with fallbacks" : "heuristic fallback"}</b></div>`;
+}
+
+function renderPicker(names) {
+  document.getElementById("picker").innerHTML = names
+    .map(n => `<button data-name="${n}" class="${n === algorithm ? "on" : ""}">${n}</button>`)
+    .join("");
+  document.querySelectorAll("#picker button").forEach(b => {
+    b.onclick = async () => {
+      const name = b.dataset.name;
+      await fetch(`/admin/algorithm?name=${encodeURIComponent(name)}`, { method: "POST" });
+      algorithm = name;
+      renderPicker(names);
+    };
+  });
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/stats", { cache: "no-store" });
+    const s = await r.json();
+    algorithm = s.algorithm;
+    if (!document.querySelector("#picker button")) {
+      renderPicker(["random", "round_robin", "weighted_rr", "least_conn",
+                    "weighted_least_conn", "least_response_time", "ml"]);
+    } else if (!document.querySelector("#picker button.on") ||
+               document.querySelector("#picker button.on").dataset.name !== algorithm) {
+      renderPicker([...document.querySelectorAll("#picker button")].map(b => b.dataset.name));
+    }
+    renderTiles(s);
+    renderServers(s);
+    renderMl(s);
+    document.getElementById("status").innerHTML =
+      `<span class="dot"></span>live — ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    document.getElementById("status").innerHTML =
+      `<span class="dot off"></span>balancer not reachable (${e.message})`;
+  }
+}
+
+tick();
+setInterval(tick, POLL_MS);
+</script>
+</body>
+</html>

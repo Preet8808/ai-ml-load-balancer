@@ -14,18 +14,20 @@ import sys
 import time
 import uuid
 import yaml
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import HTMLResponse, Response, JSONResponse
 
-from balancer.algorithms import get_algorithm, Algorithm
+from balancer.algorithms import get_algorithm, algorithm_names, Algorithm
 from balancer.interfaces import RequestContext, ServerChoice, ServerInfo, RequestType
 from balancer.collector import MetricsCollector
 from balancer.logger import RequestLogger
 
 CONFIG_PATH = os.environ.get("BALANCER_CONFIG", "balancer/config.yaml")
+DASHBOARD_PATH = Path(__file__).with_name("dashboard.html")
 ALGORITHM: Optional[str] = None
 SERVERS: List[ServerInfo] = []
 SLA_MS = 500
@@ -171,6 +173,24 @@ async def logger_status():
     return req_logger.status()
 
 
+@app.get("/admin/algorithm")
+async def get_algorithm_name():
+    """The routing algorithm that is live right now."""
+    return {"algorithm": ALGORITHM, "available": algorithm_names()}
+
+
+@app.api_route("/admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def admin_not_found(path: str):
+    """
+    Keep unknown /admin paths away from the proxy.
+
+    Without this they match the catch-all proxy route below, are forwarded to
+    a backend and logged as a request to it, so a mistyped admin path both
+    answered with a backend's 404 and added a row to the dataset's log.
+    """
+    raise HTTPException(status_code=404, detail=f"No such admin endpoint: /admin/{path}")
+
+
 @app.get("/config")
 async def get_config():
     """Get current configuration."""
@@ -211,12 +231,37 @@ async def stats():
             "metrics": s.metrics.__dict__ if s.metrics else None,
             "health_failures": getattr(s, 'health_check_failures', 0)
         })
+    # An ML router reports its own serving state, so a demo can show whether
+    # predictions are driving the decisions or a fallback is.
+    describe = getattr(algorithm_instance, "status", None)
+    ml_status = describe() if callable(describe) else None
+
     return {
         "servers": result,
         "algorithm": ALGORITHM,
         "sla_ms": SLA_MS,
         "inflight_total": sum(getattr(s, 'inflight_local', 0) for s in SERVERS),
+        "ml": ml_status,
     }
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard():
+    """
+    Live dashboard.
+
+    Served from a file, and read on each request, so an edit to the page shows
+    up on reload without restarting the balancer. `/` is free for this: the
+    load generator only ever requests /ping, /cpu, /io and /payload, so the
+    dashboard can never be counted as load traffic.
+    """
+    try:
+        return HTMLResponse(DASHBOARD_PATH.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return HTMLResponse(
+            f"<h1>Dashboard unavailable</h1><p>{DASHBOARD_PATH}: {exc}</p>",
+            status_code=500,
+        )
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -231,12 +276,21 @@ async def proxy(request: Request, path: str):
     else:
         req_type_str = "light"
 
+    # Content-Length is the only payload size known before the routing
+    # decision, because the body has not been read yet. payload_kb is a model
+    # feature, so a router that reads it after the choice would always see
+    # zero for the POST /payload traffic that exists to make it vary.
+    try:
+        declared_kb = max(float(request.headers.get("content-length", 0) or 0), 0.0) / 1024.0
+    except (TypeError, ValueError):
+        declared_kb = 0.0
+
     context = RequestContext(
         request_id=str(uuid.uuid4()),
         method=request.method,
         path=f"/{path}",
         req_type=RequestType(req_type_str),
-        payload_kb=0.0,
+        payload_kb=declared_kb,
     )
 
     choice: Optional[ServerChoice] = algorithm_instance.choose_server(context, SERVERS)
@@ -247,8 +301,6 @@ async def proxy(request: Request, path: str):
     target_url = f"http://{server.host}:{server.port}/{path}"
     if request.url.query:
         target_url += f"?{request.url.query}"
-
-    server.sent_since_snapshot = getattr(server, 'sent_since_snapshot', 0) + 1
 
     headers = dict(request.headers)
     headers.pop("host", None)
@@ -277,8 +329,10 @@ async def proxy(request: Request, path: str):
         "cpu_delta_5s": _f(server.metrics.cpu_delta_5s if server.metrics else 0.0),
     }
 
-    # Track this request as in-flight for the duration of the proxy call
-    server.sent_since_snapshot = getattr(server, 'sent_since_snapshot', 0) + 1
+    # Track this request as in-flight for the duration of the proxy call. The
+    # chosen algorithm has already counted the request in sent_since_snapshot,
+    # and this block incremented it a second time, so /stats reported roughly
+    # three times the traffic the collector had just reset the counter for.
     server.inflight_local = getattr(server, 'inflight_local', 0) + 1
 
     start_time = time.time()

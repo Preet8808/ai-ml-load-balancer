@@ -1,8 +1,16 @@
 # AI/ML Load Balancer Configuration
 # Edit the algorithm to change routing strategy
 
-algorithm: round_robin  # Options: random, round_robin, weighted_rr, least_conn, weighted_least_conn, least_response_time
+algorithm: round_robin  # Options: random, round_robin, weighted_rr, least_conn, weighted_least_conn, least_response_time, ml
 
+# `weight` is the relative capacity used by the weighted algorithms, and
+# `cpu_limit` is the capacity the router sees as a feature. Both express the
+# 4:2:2:1 design ratio. The quotas actually enforced by Docker are scaled to
+# fit this host (0.8 / 0.4 / 0.4 / 0.15, see docker-compose.yml) because a
+# quota the machine cannot deliver turns every latency sample into a scheduler
+# artefact. The collector publishes this configured value rather than the
+# quota each backend reports, so the feature the model was trained on and the
+# feature it sees at serving time are the same number.
 servers:
   - server_id: backend1
     host: backend1

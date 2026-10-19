@@ -28,6 +28,10 @@ services:
       # Read-only, so the container can never write back into the source tree.
       - ./balancer:/app/balancer:ro
       - ./ml:/app/ml:ro
+      # The trained artifact is mounted rather than baked in: the model is a
+      # build output, and copying a new one into an image would mean a full
+      # rebuild every time the model is retrained.
+      - ./models:/app/models:ro
     logging:
       driver: json-file
       options:

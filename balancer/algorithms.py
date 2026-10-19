@@ -7,6 +7,7 @@ benchmarks can swap algorithms by changing a single config value.
 
 from __future__ import annotations
 
+import importlib
 import itertools
 import random
 import math
@@ -200,10 +201,24 @@ ALGORITHMS = {
     "least_response_time": LeastResponseTime,
 }
 
+# Algorithms whose module is imported only when they are selected. The ML
+# router needs joblib and a fitted estimator, which a container serving
+# round-robin should not have to import - or even have installed.
+LAZY_ALGORITHMS = {"ml": ("balancer.ml_router", "MLRouter")}
+
+
+def algorithm_names() -> List[str]:
+    """Every selectable algorithm name, in a stable order."""
+    return list(ALGORITHMS) + list(LAZY_ALGORITHMS)
+
 
 def get_algorithm(name: str) -> Algorithm:
     """Create the routing algorithm specified by name."""
+    if name in LAZY_ALGORITHMS:
+        module_name, class_name = LAZY_ALGORITHMS[name]
+        return getattr(importlib.import_module(module_name), class_name)()
+
     cls = ALGORITHMS.get(name)
     if cls is None:
-        raise ValueError(f"Unknown algorithm: {name}. Available: {list(ALGORITHMS.keys())}")
+        raise ValueError(f"Unknown algorithm: {name}. Available: {algorithm_names()}")
     return cls()
