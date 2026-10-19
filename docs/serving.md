@@ -19,19 +19,18 @@ For every request, in `balancer/ml_router.py`:
    server with the shared transform in `ml/features.py`.
 2. One batched `predict` returns each candidate's predicted response time on
    the log1p scale; `to_ms` maps it back to milliseconds.
-3. Each candidate is charged its outstanding work, in units of its own
-   capacity:
+3. Each candidate is charged its outstanding work:
 
    ```
-   expected wait = predicted service time x (1 + in-flight requests / weight)
+   expected wait = predicted service time x (1 + in-flight requests)
    ```
 
    The prediction comes from a metrics snapshot the collector refreshes every
    two seconds; the in-flight count is live, read from this router's own
-   counter. Dividing by the configured weight (2 : 1 : 1 : 0.5) matters: one
-   queued request on the 2x backend costs half the wait it costs on a 1x
-   backend. Steps 3-4 are what keep the router from sending every request in a
-   snapshot window to the same backend.
+   counter. Step 3 is what keeps the router from sending every request in a
+   snapshot window to the same backend. (Charging it in units of the
+   configured weight instead was tried and measured worse - see "A variant
+   that lost".)
 4. The lowest expected wait wins; servers within 5 ms of it are treated as
    tied and the least loaded of those is chosen. The choice, the raw
    prediction, and the in-flight count are written to the request log.
@@ -91,11 +90,6 @@ where to look:
    and it is the quantity a queueing server actually responds to. This alone
    took the router from 68 req/s and a 172 ms median to 135 req/s and 56 ms,
    and put the busiest server's share back to a sane 23-38%.
-3. **Charge it per unit of capacity.** With the queue counted the same on every
-   backend, the router spread traffic evenly and left the 2x backend at 23%
-   where least_conn gave it 36%. Dividing the queue by the server's weight is
-   what makes the model's per-server service estimate and the queue act on the
-   same scale.
 
 `/stats` now reports `decision_ms_mean` and `decision_ms_max`, and the
 dashboard shows the mean, so the router's own cost is observable during a demo
