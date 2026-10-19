@@ -7,9 +7,24 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies.
+#
+# The cache mount keeps downloaded wheels in the builder between builds, and
+# --no-cache-dir is deliberately absent: without the mount every rebuild pulled
+# the whole dependency set again, which on a slow connection was the difference
+# between a 40-second build and one that never finished.
+COPY requirements.txt requirements-ml.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+# XGBoost is installed on its own, without dependencies. The Linux wheel
+# declares nvidia-nccl-cu12 (~350 MB) for GPU training that this project never
+# does, and CPU inference does not need it; numpy, scipy, scikit-learn and
+# joblib are already installed by requirements.txt. The version is pinned in
+# requirements-ml.txt to the one that trained the artifact, because the router
+# unpickles that model.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-deps -r requirements-ml.txt
 
 # Copy application code
 COPY . .

@@ -1,0 +1,16 @@
+# The served estimator, pinned to one version for training and serving.
+#
+# ml/train.py pickles the fitted model and the router unpickles it, so both
+# environments have to agree on XGBoost's model format. Pinning the exact
+# version is cheaper than discovering a format change during a demo.
+#
+# 3.2.0 and not newer: XGBoost 3.3.0+ declares Requires-Python >= 3.12, and the
+# service images run python:3.11-slim. Raising the image's Python to chase a
+# newer estimator would also move pandas, numpy and pyarrow, and the training
+# environment has to move with them - for nothing this project uses.
+#
+# Installed with --no-deps by Dockerfile.balancer: the Linux wheel declares
+# nvidia-nccl-cu12 (~350 MB) for GPU training this project never does, and CPU
+# inference does not need it. numpy, scipy, scikit-learn and joblib come from
+# requirements.txt.
+xgboost==3.2.0

@@ -1,4 +1,12 @@
-# AI/ML Load Balancer - Python dependencies
+# Runtime dependencies for the services.
+#
+# Installed by Dockerfile.balancer and Dockerfile.backend.
+#
+# XGBoost is deliberately not listed here. Its Linux wheel declares
+# nvidia-nccl-cu12 (~350 MB) unconditionally, for GPU training this project
+# never does, and only the balancer needs an estimator at all - not the four
+# backend containers. It is pinned in requirements-ml.txt instead and installed
+# by Dockerfile.balancer without dependencies.
 
 # Core
 fastapi>=0.110.0
@@ -6,26 +14,19 @@ uvicorn>=0.29.0
 httpx>=0.27.0
 pyyaml>=6.0
 
-# Testing
-pytest>=8.0.0
-pytest-cov>=4.0.0
-pytest-asyncio>=0.23.0
+# Load generation. The balancer image doubles as the load generator's image,
+# so its traffic script runs in this same environment.
 locust>=2.18.0
 
-# Linting
-ruff>=0.6.0
-black>=24.0.0
-
-# Backend
+# Backend metrics
 psutil>=5.9.0
 
 # Data / logging
 pandas>=2.2.0
 pyarrow>=15.0.0
 
-# ML stack (Phase 4)
+# ML inference: the model artifact is a joblib pickle of a scikit-learn
+# estimator, so unpickling it needs scikit-learn and joblib.
 scikit-learn>=1.4.0
-XGBoost>=2.0.0
 numpy>=1.26.0
 joblib>=1.3.0
-# LightGBM>=4.0.0  # not used: train.py compares Ridge, Random Forest and XGBoost

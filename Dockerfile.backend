@@ -11,16 +11,22 @@ RUN apt-get update && apt-get install -y \
 COPY backend/ ./backend/
 COPY agent/ ./agent/
 
-# Install Python dependencies
+# Install Python dependencies.
+#
+# Same cache mount as the balancer image: wheels are kept in the builder, so a
+# rebuild does not re-download them.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # Expose backend port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=2s --timeout=1s --start-period=3s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# No HEALTHCHECK here. python:3.11-slim has no curl, so the previous check
+# failed every time and reported every backend as unhealthy without ever
+# testing anything. The balancer polls /health itself every 2 s and that is the
+# signal routing uses; a second probe from Docker would also add requests to the
+# backend's own req_rate_5s, which is a model feature.
 
 # Run the backend
 CMD ["python", "-m", "backend.main"]
