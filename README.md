@@ -91,19 +91,61 @@ TRAFFIC_PROFILE=burst TRAFFIC_USERS=30 python -m locust -f bench/traffic_profile
   --host=http://localhost:9090 --headless
 ```
 
+## Live demo
+
+The balancer serves its own dashboard at <http://localhost:9090/>. It shows each
+backend's CPU relative to its quota, in-flight requests, requests routed in the
+last second, EWMA and p95 latency, and error rate, and it switches the routing
+algorithm live - so the same traffic can be shown being routed differently
+without restarting anything.
+
+```bash
+docker compose up -d                                   # dashboard at localhost:9090
+python ml/train.py --data data --output models         # writes models/*.joblib
+curl -X POST "http://localhost:9090/admin/algorithm?name=ml"
+```
+
+`/stats` reports the model's serving state too, so a real prediction-driven run
+can be told apart from one that silently fell back to a heuristic:
+
+```json
+"ml": {"loaded": true, "artifact": "xgboost_032d9bab9a.joblib",
+       "estimator": "XGBRegressor", "decisions": 4213, "fallbacks": 0}
+```
+
+With no artifact present, or one that cannot be loaded, the router keeps
+routing on least-connections rather than failing, and `fallbacks` counts it.
+
+### A/B: does the ML router actually help?
+
+```bash
+python bench/ab_compare.py --profiles mixed_cost --policies round_robin ml --repeats 3
+python bench/ab_compare.py --profiles degraded --repeats 2 --duration 90
+```
+
+Same profile, concurrency and duration under each policy, with the policies
+interleaved inside each repeat and the order inside a pair shuffled, so host
+drift does not attach itself to one policy. Latency is read back from the
+balancer's own Parquet log - the same rows the dataset is built from - and the
+routing distribution is read from `server_id`, so "which server got the
+traffic" is measured rather than assumed.
+
 ## Milestones
 
-| Milestone | Week | Focus |
-|-----------|------|-------|
-| M1 | 1 | Project skeleton and CI green |
-| M2 | 3 | Baseline balancer works end-to-end |
-| M3 | 5 | Live metrics and logs flowing |
-| M4 | 6 | Dataset v1 (200k+ rows) |
-| M5 | 8 | Model beats naive baseline by 30%+ MAE |
-| M6 | 9 | MVP: ML balancer demo |
-| M7 | 11 | Feature freeze, all tests green |
-| M8 | 12 | Raw results complete |
-| M9 | 14 | Final submission |
+| Milestone | Week | Focus | Status |
+|-----------|------|-------|--------|
+| M1 | 1 | Project skeleton and CI green | done |
+| M2 | 3 | Baseline balancer works end-to-end | done |
+| M3 | 5 | Live metrics and logs flowing | done |
+| M4 | 6 | Dataset v1 (200k+ rows) | done - 218,011 rows, 18 cells |
+| M5 | 8 | Model beats naive baseline by 30%+ MAE | done - +53.9% (XGBoost) |
+| M6 | 9 | MVP: ML balancer demo | in progress |
+| M7 | 11 | Feature freeze, all tests green | planned |
+| M8 | 12 | Raw results complete | planned |
+| M9 | 14 | Final submission | planned |
+
+See `docs/dataset.md` for the per-cell table, the signal gate, the model
+comparison and the M5 verdict.
 
 ## License
 MIT

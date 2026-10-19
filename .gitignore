@@ -48,3 +48,10 @@ model_*.pkl
 trained_models/
 results/
 logs/
+
+# The Random Forest is trained as a negative result (see docs/dataset.md): 59 MB
+# for a model the router never loads, because it is less accurate than XGBoost
+# and spends the request's own latency scoring candidates. It is reproducible
+# with `python ml/train.py`, so it is not carried in the repository. The served
+# XGBoost artifact (1.7 MB) and the ridge baseline (2 KB) are committed.
+models/random_forest_*.joblib

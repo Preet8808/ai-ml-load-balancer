@@ -24,6 +24,7 @@ import hashlib
 import json
 import sys
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -41,6 +42,11 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+# XGBoost's sklearn wrapper emits this warning on every parallel fit through a
+# joblib/sklearn version difference. It says nothing about this pipeline, and
+# it produced ~95,000 lines that buried the progress and result output.
+warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*")
 
 from ml.features import (
     FEATURE_COLUMNS,
