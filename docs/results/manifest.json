@@ -1,0 +1,55 @@
+{
+  "started_at": 1792493054.0361803,
+  "commit": "3d9246e4565c50203a46a28b0aca9c6245f9b524",
+  "dirty_tree": false,
+  "seed": 42,
+  "duration_s": 60,
+  "warmup_s": 12,
+  "repeats": 5,
+  "algorithms": [
+    "round_robin",
+    "weighted_rr",
+    "least_conn",
+    "least_response_time",
+    "ml"
+  ],
+  "scenarios": [
+    "steady",
+    "ramp",
+    "burst",
+    "degraded",
+    "failure"
+  ],
+  "scenario_specs": {
+    "steady": {
+      "profile": "steady",
+      "users": 30
+    },
+    "ramp": {
+      "profile": "ramp",
+      "users": 30
+    },
+    "burst": {
+      "profile": "burst",
+      "users": 30
+    },
+    "degraded": {
+      "profile": "degraded",
+      "users": 24,
+      "env": {
+        "ENDPOINT_MIX": "ping:0.2,cpu:0.4,io:0.25,payload:0.15"
+      },
+      "degrade": true
+    },
+    "failure": {
+      "profile": "steady",
+      "users": 30,
+      "kill": true
+    }
+  },
+  "drift_threshold_for_ml": 10.0,
+  "total_cells": 125,
+  "already_ok": 0,
+  "planned_this_session": 125,
+  "estimated_minutes": 175.0
+}

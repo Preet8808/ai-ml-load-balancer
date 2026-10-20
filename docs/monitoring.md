@@ -162,6 +162,16 @@ actual ms, the log-space error, status, whether a model made the call, and the
 reason string for the last 15 decisions. Together they close the
 predicted-vs-actual and decision-log gaps against the plan.
 
+A latency panel plots p95 over time. The server computes a 60 s window of
+successful requests on every `/stats` poll (`latency` in the payload) and reports
+nearest-rank p50/p95/p99; the page keeps the last 120 polls, so the chart is two
+minutes of five-second windows rather than a client-side re-aggregation. Failed
+requests are excluded because a 503 returns fast and would drag the p95 down;
+error rate is reported separately, as in the A/B harness. The window is a
+`deque` of at most 20,000 `(timestamp, ms)` pairs - enough for 60 s at this
+host's peak rate - and the percentile is computed once per poll, not per
+request.
+
 ## Limits
 
 - **Live MAE is not the training MAE.** The training number is measured on the

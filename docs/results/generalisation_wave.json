@@ -1,0 +1,27 @@
+{
+  "profile": "wave",
+  "held_out_runs": [
+    "wave_least_conn_0",
+    "wave_random_0",
+    "wave_round_robin_0"
+  ],
+  "train_rows": 145934,
+  "test_rows": 30957,
+  "model": {
+    "mae_log": 0.5521154305414564,
+    "rmse_log": 0.7119648258716882,
+    "r2_log": 0.7013114970685075,
+    "mae_ms": 64.41948251524563,
+    "p90_abs_err_ms": 132.8468228484032,
+    "spearman": 0.7372900944422005
+  },
+  "naive": {
+    "mae_log": 1.3384629415471394,
+    "rmse_log": 1.5784757233924243,
+    "r2_log": -0.4681730359825733,
+    "mae_ms": 138.68492055593913,
+    "p90_abs_err_ms": 272.1093219360352,
+    "spearman": 0.46212643814068416
+  },
+  "improvement_pct": 58.8
+}

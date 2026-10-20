@@ -29,6 +29,7 @@ import math
 import random
 import statistics
 import sys
+import textwrap
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -149,15 +150,17 @@ def cpu_imbalance(path: Path, cache: dict[str, float | None]) -> float | None:
 # ---------------------------------------------------------------------------
 
 def load_results(path: Path) -> list[dict]:
-    rows = []
+    rows: dict[str, dict] = {}
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line:
             continue
         row = json.loads(line)
         if row.get("status") == "ok" and row.get("rows", 0) > 0:
-            rows.append(row)
-    return rows
+            # A retried cell appends a new result under the same run_id; the
+            # latest successful attempt is the one that counts.
+            rows[row["run_id"]] = row
+    return list(rows.values())
 
 
 def cell(rows: list[dict], scenario: str, algorithm: str) -> list[dict]:
@@ -438,25 +441,30 @@ def chart_p95(rows: list[dict], path: Path) -> None:
     width = 0.16
     positions = range(len(SCENARIOS))
     for index, algorithm in enumerate(ALGORITHMS):
-        means, errors = [], []
+        means, lower, upper = [], [], []
         for scenario in SCENARIOS:
             values = series(cell(rows, scenario, algorithm), "p95")
             if not values:
                 means.append(0)
-                errors.append(0)
+                lower.append(0)
+                upper.append(0)
                 continue
             mean, lo, hi = mean_ci(values)
             means.append(mean)
-            errors.append((hi - lo) / 2)
+            lower.append(max(0.0, mean - lo))
+            upper.append(max(0.0, hi - mean))
         offset = (index - (len(ALGORITHMS) - 1) / 2) * width
         axis.bar(
             [p + offset for p in positions], means, width,
-            yerr=errors, capsize=2, label=LABELS[algorithm],
+            yerr=[lower, upper], capsize=2, label=LABELS[algorithm],
             color=COLORS[algorithm], edgecolor="white", linewidth=0.6,
             error_kw={"elinewidth": 0.8, "ecolor": "#555"},
         )
     axis.set_xticks(list(positions))
-    axis.set_xticklabels([SCENARIO_TITLES[s] for s in SCENARIOS])
+    axis.set_xticklabels(
+        [textwrap.fill(SCENARIO_TITLES[s], 16) for s in SCENARIOS],
+        fontsize=8,
+    )
     axis.set_ylabel("p95 latency (ms)")
     axis.set_title("p95 by scenario, mean of 5 runs (error bars: bootstrap 95% CI)")
     axis.legend(ncol=5, fontsize=8, loc="upper left")

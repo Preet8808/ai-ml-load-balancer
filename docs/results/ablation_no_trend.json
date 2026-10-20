@@ -1,0 +1,106 @@
+{
+  "naive": {
+    "metrics": {
+      "mae_log": 1.2737845487310824,
+      "rmse_log": 1.5243766677739599,
+      "r2_log": -0.29072948760569073,
+      "mae_ms": 140.4859532222069,
+      "p90_abs_err_ms": 306.7219808578491,
+      "spearman": 0.41406259976934146,
+      "rank_of_4": NaN
+    }
+  },
+  "xgboost": {
+    "metrics": {
+      "mae_log": 0.6123654961034034,
+      "rmse_log": 0.7863430640899421,
+      "r2_log": 0.6565411058773454,
+      "mae_ms": 78.38917790162714,
+      "p90_abs_err_ms": 164.65502564300232,
+      "spearman": 0.6857510932379853,
+      "infer_batch_mean_ms": 7.1532230001321295,
+      "infer_batch_p99_ms": 12.7087520025816
+    },
+    "feature_importance": [
+      [
+        "inflight",
+        0.2660653293132782
+      ],
+      [
+        "rt_ewma_ms",
+        0.16183501482009888
+      ],
+      [
+        "req_type_cpu",
+        0.15368884801864624
+      ],
+      [
+        "req_type_light",
+        0.10635917633771896
+      ],
+      [
+        "err_rate_5s",
+        0.06505049765110016
+      ],
+      [
+        "cpu_limit",
+        0.06151096895337105
+      ],
+      [
+        "req_type_io",
+        0.06041967123746872
+      ],
+      [
+        "req_rate_5s",
+        0.047895949333906174
+      ],
+      [
+        "srv_cpu_pct",
+        0.03777316212654114
+      ],
+      [
+        "srv_mem_pct",
+        0.017420673742890358
+      ],
+      [
+        "req_type_payload",
+        0.011154498904943466
+      ],
+      [
+        "payload_kb",
+        0.010826224461197853
+      ]
+    ]
+  },
+  "meta": {
+    "data_hash": "032d9bab9a",
+    "rows": 178165,
+    "runs": 18,
+    "train_runs": 12,
+    "test_runs": [
+      "burst_random_0",
+      "mixed_cost_round_robin_0",
+      "steady_random_0",
+      "wave_least_conn_0"
+    ],
+    "feature_columns": [
+      "srv_cpu_pct",
+      "srv_mem_pct",
+      "inflight",
+      "req_rate_5s",
+      "rt_ewma_ms",
+      "err_rate_5s",
+      "cpu_limit",
+      "payload_kb",
+      "req_type_light",
+      "req_type_cpu",
+      "req_type_io",
+      "req_type_payload"
+    ],
+    "dropped_features": [
+      "cpu_delta_5s",
+      "rt_p95_5s_ms"
+    ],
+    "best_model": "xgboost"
+  }
+}

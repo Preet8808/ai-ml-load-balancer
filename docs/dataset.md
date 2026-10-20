@@ -96,10 +96,12 @@ ids for an 18-cell matrix.
 
 `ml/train.py` splits by `run_id`, never by row: adjacent rows inside a run
 share a server state that evolves over seconds, so a random row split leaks
-the validation set into training. 12 runs train, the remaining 4 held-out runs
+the validation set into training. 12 runs train, 2 are validation (early
+stopping), and the remaining 4 held-out runs
 (`burst_random_0`, `mixed_cost_round_robin_0`, `steady_random_0`,
 `wave_least_conn_0`) are the test set. 178,165 rows survive the warm-up
-window and the exclusion of failed requests.
+window and the exclusion of failed requests; the training split itself is
+121,061 rows.
 
 | model | MAE(log) | MAE ms | R² | Spearman | CV R² | inference (5 servers) |
 |---|---:|---:|---:|---:|---:|---:|
@@ -114,6 +116,16 @@ straw man: it is exactly what `least_response_time` routes on, and it scores
 *worse than predicting the mean* (R² -0.29), because the last seconds' EWMA
 does not describe the next request's wait once the server's queue has changed
 in between.
+
+**Top-1 server-ranking accuracy is not identifiable from this data.** The log
+records the latency of the server that served each request; it never observes
+the same request on the other three servers, so there is no ground-truth
+"fastest server" to rank a decision against. Spearman is reported instead: it
+measures whether the model orders *requests* by difficulty (predicted against
+actual latency on the served server). Measuring per-decision ranking accuracy
+would need active probing or replaying each request against every candidate,
+which changes the system being measured. This is stated rather than approximated
+with a metric that would look better than it is.
 
 The Random Forest is the useful negative result. It is dominated on both axes:
 less accurate than XGBoost (MAE(log) 0.591 against 0.587) and about nine times

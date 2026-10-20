@@ -1,6 +1,7 @@
 # AI/ML Load Balancer - Project Hypotheses
 
-*Drafted during Phase 0 — will be finalized before Phase 5 (M6).*
+*Drafted during Phase 0 and frozen before the Phase 7 campaign. The verdicts
+below are from the 125-cell matrix; the full evidence is in `docs/results.md`.*
 
 ## H1: ML-Predictive has lower p95 latency than the best traditional baseline
 
@@ -54,9 +55,14 @@ route around them. The fallback to Least Connections ensures no single point of 
 
 ## Hypotheses Status
 
-| Hypothesis | Status | Finalized |
-|------------|--------|-----------|
-| H1 | ✅ Planned | To be frozen at M6 (Week 9) |
-| H2 | ✅ Planned | To be frozen at M6 (Week 9) |
-| H3 | ✅ Planned | To be frozen at M6 (Week 9) |
-| H4 | ✅ Planned | To be frozen at M6 (Week 9) |
+| Hypothesis | Verdict | Evidence |
+|---|---|---|
+| H1 | **Not met** | 0/5 significant wins (needs 3); burst and degraded means favour ML but Holm-adjusted p=1.0; steady, ramp and failure favour least-connections |
+| H2 | **Met, with caveat** | steady ML p95 433 vs Round Robin 789 ms (0.55x); least-connections is 214 ms (2.02x better than ML), so this is a weak-baseline check, not a live win |
+| H3 | **Met on the mean** | ML decision mean 1.96 ms; one 126.72 ms scheduler/Python tail outlier is reported |
+| H4 | **Met** | worst redirect 1.13 s of 25 failure runs; final 5xx 0.00%; traffic returns 7.7 s after restart including slow start |
+
+H2's original wording assumes identical servers; the test bed keeps the 4:2:2:1
+CPU quotas, so the steady comparison against round robin is the harder
+heterogeneous case. H4's "zero dropped requests" is the final 5xx rate: retries
+can fail and recover inside the run, but no request ends in a 5xx.

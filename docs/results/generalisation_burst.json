@@ -1,0 +1,27 @@
+{
+  "profile": "burst",
+  "held_out_runs": [
+    "burst_least_conn_0",
+    "burst_random_0",
+    "burst_round_robin_0"
+  ],
+  "train_rows": 142600,
+  "test_rows": 34291,
+  "model": {
+    "mae_log": 0.5529578780011862,
+    "rmse_log": 0.7129389134533312,
+    "r2_log": 0.6797373286319375,
+    "mae_ms": 56.43599839541506,
+    "p90_abs_err_ms": 115.8848890356494,
+    "spearman": 0.7075649849151614
+  },
+  "naive": {
+    "mae_log": 1.3676555907722314,
+    "rmse_log": 1.6106263202112037,
+    "r2_log": -0.6345238645401956,
+    "mae_ms": 114.70108003104751,
+    "p90_abs_err_ms": 204.4963041229248,
+    "spearman": 0.4298331425519902
+  },
+  "improvement_pct": 59.6
+}

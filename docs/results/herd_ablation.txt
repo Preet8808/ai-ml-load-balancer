@@ -1,0 +1,75 @@
+﻿==============================================================================
+  A/B routing comparison
+  profiles : ['burst']
+  policies : ['ml', 'ml_predictive']   repeats: 3
+  duration : 60s per run   6 runs (~7 min)
+==============================================================================
+  warming up for 25s at 30 users...
+    locust (own container, 1.0 cpu): profile=steady users=30 25s
+  warm-up discarded (1 file(s))
+
+  -> burst / ml_predictive  (repeat 0, 30 users, 60s)
+    locust (own container, 1.0 cpu): profile=burst users=30 60s
+     wall 63s
+
+  -> burst / ml  (repeat 0, 30 users, 60s)
+    locust (own container, 1.0 cpu): profile=burst users=30 60s
+     wall 63s
+
+  -> burst / ml_predictive  (repeat 1, 30 users, 60s)
+    locust (own container, 1.0 cpu): profile=burst users=30 60s
+     wall 63s
+
+  -> burst / ml  (repeat 1, 30 users, 60s)
+    locust (own container, 1.0 cpu): profile=burst users=30 60s
+     wall 63s
+
+  -> burst / ml  (repeat 2, 30 users, 60s)
+    locust (own container, 1.0 cpu): profile=burst users=30 60s
+     wall 63s
+
+  -> burst / ml_predictive  (repeat 2, 30 users, 60s)
+    locust (own container, 1.0 cpu): profile=burst users=30 60s
+     wall 63s
+
+==============================================================================
+  A/B summary (latency over successful requests, errors over all rows)
+==============================================================================
+profile  policy         runs  req/s  p50 ms  p95 ms  p99 ms  errors
+-------  -------------  ----  -----  ------  ------  ------  ------
+burst    ml             3     102    126     342     518     0.00%
+burst    ml_predictive  3     73     208     700     1134    0.00%
+
+  Paired per-repeat comparison (a ratio below 1.00 means the second policy was faster)
+profile  repeat  p95 base -> new  ratio  p99 base -> new  ratio  errors
+-------  ------  ---------------  -----  ---------------  -----  --------------
+burst    0       343 -> 758       2.21   519 -> 1350      2.60   0.00% -> 0.00%
+burst    1       327 -> 741       2.27   500 -> 1141      2.28   0.00% -> 0.00%
+burst    2       355 -> 599       1.69   534 -> 911       1.71   0.00% -> 0.00%
+
+  ml_predictive vs ml: p95 median ratio 2.21, faster in 0/3 pairs
+  ml_predictive vs ml: p99 median ratio 2.28, faster in 0/3 pairs
+
+  Routing distribution (% of requests per backend)
+profile  policy         rep  backend1  backend2  backend3  backend4
+-------  -------------  ---  --------  --------  --------  --------
+burst    ml             0    29%       28%       29%       14%
+burst    ml             1    29%       28%       29%       15%
+burst    ml             2    30%       29%       30%       11%
+burst    ml_predictive  0    47%       17%       33%       3%
+burst    ml_predictive  1    46%       23%       29%       1%
+burst    ml_predictive  2    69%       8%        22%       1%
+
+  Model serving state after each run
+policy         profile  rep  artifact                   estimator     decisions  fallbacks  loaded
+-------------  -------  ---  -------------------------  ------------  ---------  ---------  ------
+ml             burst    0    xgboost_032d9bab9a.joblib  XGBRegressor  6124       0          yes
+ml             burst    1    xgboost_032d9bab9a.joblib  XGBRegressor  6148       0          yes
+ml             burst    2    xgboost_032d9bab9a.joblib  XGBRegressor  6072       0          yes
+ml_predictive  burst    0    xgboost_032d9bab9a.joblib  XGBRegressor  4165       0          yes
+ml_predictive  burst    1    xgboost_032d9bab9a.joblib  XGBRegressor  4130       0          yes
+ml_predictive  burst    2    xgboost_032d9bab9a.joblib  XGBRegressor  4876       0          yes
+
+  A run with fallbacks > 0 was not fully model-driven; treat it as evidence about the fallback, not the model.
+
+  raw results: C:\Users\DELL\projects\ai_ml_load_balancer\scratch\ab\ab_report_1792504163.json

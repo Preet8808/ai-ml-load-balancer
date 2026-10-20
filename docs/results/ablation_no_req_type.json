@@ -1,0 +1,98 @@
+{
+  "naive": {
+    "metrics": {
+      "mae_log": 1.2737845487310824,
+      "rmse_log": 1.5243766677739599,
+      "r2_log": -0.29072948760569073,
+      "mae_ms": 140.4859532222069,
+      "p90_abs_err_ms": 306.7219808578491,
+      "spearman": 0.41406259976934146,
+      "rank_of_4": NaN
+    }
+  },
+  "xgboost": {
+    "metrics": {
+      "mae_log": 0.6954693584803624,
+      "rmse_log": 0.8703256683966718,
+      "r2_log": 0.5792595850682374,
+      "mae_ms": 122.13045328572592,
+      "p90_abs_err_ms": 240.4472868918025,
+      "spearman": 0.6400962932474892,
+      "infer_batch_mean_ms": 6.9926410000698525,
+      "infer_batch_p99_ms": 14.253897005110028
+    },
+    "feature_importance": [
+      [
+        "rt_p95_5s_ms",
+        0.5180198550224304
+      ],
+      [
+        "cpu_limit",
+        0.12963733077049255
+      ],
+      [
+        "rt_ewma_ms",
+        0.11164531856775284
+      ],
+      [
+        "req_rate_5s",
+        0.08033840358257294
+      ],
+      [
+        "inflight",
+        0.04838787391781807
+      ],
+      [
+        "err_rate_5s",
+        0.037670716643333435
+      ],
+      [
+        "srv_cpu_pct",
+        0.030833769589662552
+      ],
+      [
+        "cpu_delta_5s",
+        0.02074691466987133
+      ],
+      [
+        "srv_mem_pct",
+        0.01415144745260477
+      ],
+      [
+        "payload_kb",
+        0.00856836885213852
+      ]
+    ]
+  },
+  "meta": {
+    "data_hash": "032d9bab9a",
+    "rows": 178165,
+    "runs": 18,
+    "train_runs": 12,
+    "test_runs": [
+      "burst_random_0",
+      "mixed_cost_round_robin_0",
+      "steady_random_0",
+      "wave_least_conn_0"
+    ],
+    "feature_columns": [
+      "srv_cpu_pct",
+      "srv_mem_pct",
+      "inflight",
+      "req_rate_5s",
+      "rt_ewma_ms",
+      "rt_p95_5s_ms",
+      "err_rate_5s",
+      "cpu_limit",
+      "cpu_delta_5s",
+      "payload_kb"
+    ],
+    "dropped_features": [
+      "req_type_light",
+      "req_type_cpu",
+      "req_type_io",
+      "req_type_payload"
+    ],
+    "best_model": "xgboost"
+  }
+}

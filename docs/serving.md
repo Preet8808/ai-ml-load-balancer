@@ -10,6 +10,13 @@ decide fast enough not to become the bottleneck itself.
 This document records the serving path, the measurement that tests it, the
 first result - which was a loss - and what fixing it changed.
 
+> **Phase 7 update.** The pre-registered 125-cell matrix in `docs/results.md` is
+> the primary comparison. It confirms that least-connections is the strongest
+> policy overall, and it finds ML mean p95 243 vs 275 ms on burst - a small,
+> non-significant win rather than the exploratory loss below. The exploratory
+> result is kept because it shows the session-to-session variation; the M6 burst
+> criterion remains **not met** because there is no significant, consistent win.
+
 ## How a decision is made
 
 For every request, in `balancer/ml_router.py`:
@@ -143,7 +150,7 @@ higher median. That is the honest result. The reasons are visible in the data:
   (33 / 27 / 28 / 12), so its median request lands on a 1x backend. That is
   why its p50 is worse than both heuristics while its tail is far better than
   round_robin's.
-- The model costs 1.4 ms per decision; least_conn costs nothing.
+- The model costs 1.4-2.0 ms per decision; least_conn costs nothing.
 
 None of that contradicts M5: the model predicts response time 53.9% better
 than the naive baseline. It says that on a four-server cluster with two-second
@@ -172,7 +179,8 @@ one.
 ## The burst profile: a negative result
 
 The plan's M6 exit criterion is that ml shows a lower p95 than least_conn in
-the burst scenario. It does not - three paired repeats at 30 users:
+the burst scenario. The earlier exploratory session did not - three paired
+repeats at 30 users:
 
 | policy | req/s | p50 | p95 | p99 | errors |
 |---|---:|---:|---:|---:|---:|
@@ -264,5 +272,5 @@ errors under any policy, and the router is what keeps the tail low.
   metrics; a production deployment would poll faster and could fold in-flight
   work into the model's inputs instead of correcting after the fact.
 - Inference runs on the event loop, so `ml` has a CPU ceiling of roughly one
-  decision per `decision_ms_mean`. It is affordable here (~1.4 ms) but it is
+  decision per `decision_ms_mean`. It is affordable here (~1.4-2.0 ms) but it is
   the reason the algorithm is not free.

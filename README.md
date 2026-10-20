@@ -29,6 +29,31 @@ python -m pytest
 docker compose up
 ```
 
+On a machine with `make` (Linux, macOS, CI), the same entry points are wrapped:
+
+```bash
+make up          # build and start, dashboard on :9090
+make test        # 121 tests
+make benchmark   # 125-cell Phase 7 matrix (resumable, ~3 h)
+make analyse     # tables, confidence intervals, charts
+```
+
+## Deliverables
+
+| Document | What it is |
+|---|---|
+| `docs/report.md` | Final report: design, experiment, results, threats to validity |
+| `docs/results.md` | Phase 7 matrix analysis: tables, H1-H4, charts |
+| `docs/ablations.md` | Feature ablations, unseen-profile generalisation, herd ablation |
+| `docs/dataset.md` | Dataset, signal gate, model selection, M5 verdict |
+| `docs/serving.md` | Serving path and the exploratory A/B evidence, including the burst session loss |
+| `docs/resilience.md` | Retry, breaker, slow start, stale feed, stress evidence |
+| `docs/monitoring.md` | Decision log, serving cost, drift guard |
+| `docs/slides.md` | 15-slide final deck |
+| `docs/demo.md` | Five-minute live demo script |
+| `docs/viva.md` | Anticipated questions with honest answers |
+| `docs/traceability.md` | Every plan deliverable mapped to its evidence |
+
 ## Dataset generation
 
 The dataset is produced by `bench/quick_dataset.py`, which drives load at each
@@ -130,6 +155,10 @@ routing on least-connections rather than failing, and `fallbacks` counts it.
 
 ### A/B: does the ML router actually help?
 
+These are exploratory single-profile A/Bs. The pre-registered 125-cell matrix
+below is the primary comparison; the exploratory sessions are kept because they
+show the herding/queue correction and the session-to-session variation.
+
 ```bash
 python bench/ab_compare.py --profiles mixed_cost --policies round_robin ml --repeats 3
 python bench/ab_compare.py --profiles degraded --repeats 2 --duration 90
@@ -157,10 +186,12 @@ ratio 1.46, 0 of 3 repeats). Both held in every repeat across two sessions.
 `docs/serving.md` explains why, and documents the herding bug the first serving
 version had and the queue correction that fixed it.
 
-On `burst` the comparison reverses: least_conn 211 req/s / p95 77 ms against ml
-165 / 138 ms, ml losing 0 of 3 pairs (1.66-1.95x worse). The plan's M6 criterion
-for bursts is therefore recorded as **not met**; `docs/serving.md` shows the
-routing distribution that explains it.
+On `burst`, that exploratory comparison reverses: least_conn 211 req/s / p95
+77 ms against ml 165 / 138 ms, ml losing 0 of 3 pairs (1.66-1.95x worse). The
+plan's M6 criterion remains **not met**; the Phase 7 matrix later found a small,
+non-significant mean win (243 vs 275 ms), not a consistent burst win.
+`docs/serving.md` shows the routing distribution that explains the exploratory
+loss.
 
 Under the `degraded` profile - one backend 400 ms slower and failing 35% of
 requests - ml routes 0-1% of traffic to the faulted backend against
@@ -175,6 +206,32 @@ both policies near zero errors, so the difference shows up in latency:
 Before the safeguards existed, the same pairing measured 0.26% against 8.73%
 errors and 162 against 414 ms p95. `docs/serving.md` keeps both tables: the
 first shows the router's avoidance, the second the whole serving stack.
+
+### Phase 7 matrix (primary comparison)
+
+125 cells (5 algorithms x 5 scenarios x 5 repeats) completed in one randomised
+session from commit `3d9246e`: **125 ok, 0 failed**, seed 42, 60 s measured +
+12 s warm-up. Full evidence: `docs/results/`, prose and charts: `docs/results.md`.
+
+| Scenario | ML p95 | Best baseline p95 | Change |
+|---|---:|---:|---:|
+| Steady | 433 | 214 (least conn) | +102% |
+| Ramp | 273 | 169 (least conn) | +62% |
+| Burst | 243 | 275 (least conn) | -12% (n.s.) |
+| Degraded | 182 | 269 (least RT) | -32% (n.s.) |
+| Failure | 734 | 209 (least conn) | +252% |
+
+**H1 is not met**: 0/5 significant wins (needs 3). The favourable burst and
+degraded means do not survive Holm correction at five runs; ML loses steady,
+ramp and failure, and least connections has the best throughput in all five.
+**H2 is met** only against round robin (0.55x; 2.02x worse than least
+connections). **H3 is met** on the mean (1.96 ms; one 126.72 ms scheduler tail).
+**H4 is met** (worst redirect 1.13 s, 0.00% final 5xx; traffic returns 7.7 s
+after restart). Live MAE is 1.394 steady and 2.421 failure versus 0.5868
+offline; the collapsed runs send 4-7% to backend4 and lose capacity. The drift
+guard was pinned at 10 for the matrix; at the shipped 1.0 it would demote. The
+herd ablation is the clearest live win: burst p95 342 vs 700 ms and 102 vs 73
+req/s, herd faster in 3/3 paired runs.
 
 ### Resilience under failure
 
@@ -216,7 +273,11 @@ least-connections when the rolling MAE exceeds 1.0 (the naive baseline is
 the window on demotion, and promotes itself back after a clean full window.
 Measured live: `live MAE(log) 0.4603` on ordinary traffic; lowering the
 threshold demoted it (`drift_routed` 112, every reason `drift-fallback`), and
-restoring it promoted it back (`promotions 1`). See `docs/monitoring.md`.
+restoring it promoted it back (`promotions 1`). In the Phase 7 matrix the mean
+live MAE is 1.394 in steady, 1.151 in ramp, 0.898 in burst, 0.519 in degraded
+and 2.421 in failure; the matrix pins the guard at 10 to measure routing, so no
+cell demoted. At 1.0 the steady, ramp and failure windows would have crossed.
+See `docs/monitoring.md` and `docs/results.md`.
 
 ## Milestones
 
@@ -225,12 +286,12 @@ restoring it promoted it back (`promotions 1`). See `docs/monitoring.md`.
 | M1 | 1 | Project skeleton and CI green | done |
 | M2 | 3 | Baseline balancer works end-to-end | done |
 | M3 | 5 | Live metrics and logs flowing | done |
-| M4 | 6 | Dataset v1 (200k+ rows) | done - 218,011 rows, 18 cells |
+| M4 | 6 | Dataset v1 (200k+ rows) | partial - 218,011 rows, 18 runs (plan asked 20+) |
 | M5 | 8 | Model beats naive baseline by 30%+ MAE | done - +53.9% (XGBoost) |
-| M6 | 9 | MVP: ML balancer demo | partial - stale-feed fallback and routing overhead met; burst-vs-least_conn measured and **not met** (p95 1.76x worse) |
+| M6 | 9 | MVP: ML balancer demo | partial - stale-feed fallback, routing overhead and failure redirect met; burst-vs-least_conn is not a significant win in the matrix, and the earlier A/B lost |
 | M7 | 11 | Feature freeze, all tests green | done - 121 tests; stress, chaos, slow start, decision log, drift guard, `ml_predictive`/`ml_herd` split, p95-over-time panel and Nginx/HAProxy reference configs |
-| M8 | 12 | Raw results complete | in progress - 125-cell campaign (`bench/run_matrix.py`) running; ablations and unseen-profile tests complete |
-| M9 | 14 | Final submission | planned |
+| M8 | 12 | Raw results complete | done - 125/125 cells, 0 failed; tables, CIs, CDFs, burst/failure timelines and analysis committed |
+| M9 | 14 | Final submission | partial - report, slides, demo and viva written; no screen recording and no timed fresh-machine setup |
 
 See `docs/dataset.md` for the per-cell table, the signal gate, the model
 comparison and the M5 verdict, `docs/serving.md` for the serving path and the
@@ -246,13 +307,16 @@ rather than implied to be done:
   serve traffic through the same backends and are documented in `deploy/`, but
   they write no request log of the shape this project measures from, so they are
   not in the Phase 7 campaign yet. A client-side harness is the remaining work.
-- **Phase 7 matrix.** The 5-algorithm x 5-scenario x 5-repeat campaign is
-  running as this is committed; results land in `docs/results.md`. The 18-cell
-  dataset campaign documented in `docs/dataset.md` remains the reduced campaign
-  the model was trained on.
-- **M6's burst criterion.** ML still loses to least_conn on burst p95. The
-  Phase 7 matrix will show whether that holds across the five scenarios; the
-  negative result is kept either way.
+- **Phase 7 matrix.** The 125-cell campaign is complete (125/125 ok). The
+  pre-registered result is negative on H1: ML is not significantly better in
+  three scenarios. The 18-cell dataset campaign documented in `docs/dataset.md`
+  remains the reduced campaign the model was trained on.
+- **M6's burst criterion.** The matrix mean is 243 vs 275 ms in ML's favour but
+  not significant; the earlier dedicated A/B lost (138 vs 77 ms). M6 stays
+  partial because there is no consistent, significant burst win.
+- **M9 evidence.** The demo and runbook are written, but there is no screen
+  recording and no timed fresh-machine setup. Those are the two missing pieces
+  of the plan's M9 checklist.
 
 ## License
 MIT

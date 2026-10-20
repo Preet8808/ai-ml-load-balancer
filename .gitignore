@@ -37,6 +37,7 @@ Thumbs.db
 # Data files
 dataset_*.parquet
 *.csv
+!docs/results/summary.csv
 data/
 scratch/
 
@@ -47,6 +48,8 @@ scratch/
 model_*.pkl
 trained_models/
 results/
+!docs/results/
+!docs/results/**
 logs/
 decisions/
 
