@@ -14,6 +14,14 @@ curl.exe -s http://localhost:9090/stats     # healthy: 4, feed age well under 3 
 Open <http://localhost:9090/> in a browser. Keep `docs/results.md` open in a
 second tab for the last minute.
 
+Start a run so the request and decision Parquet files are actually written
+(without an active run the balancer still routes, but the logger drops the rows
+by design, because they would not belong to a run):
+
+```powershell
+curl.exe -X POST "http://localhost:9090/admin/run?run_id=demo"
+```
+
 Three terminals:
 
 - **A** - traffic: `python bench/demo_traffic.py --seconds 120 --rate 24`
@@ -111,6 +119,16 @@ experiment, not a claimed win. H3 and H4 still pass. Close on the engineering
 answer: the decision log, queue term and drift guard are what make a learned
 router debuggable, and the negative is measured from the same logs as the wins.
 
+## After the demo
+
+```powershell
+curl.exe -X POST "http://localhost:9090/admin/seal"
+```
+
+This closes the Parquet footer so `logs/demo_*.parquet` and the matching decision
+file are readable. The run id is in every row, so the two logs join on
+`(run_id, timestamp)`.
+
 ## If something goes wrong
 
 | Symptom | Cause | What to say / do |
@@ -118,4 +136,5 @@ router debuggable, and the negative is measured from the same logs as the wins.
 | dashboard tiles stale | metrics feed stopped | wait 3 s: the stale-feed fallback takes over; 30/30 200s was measured |
 | 503s during the fault | retry could not find a healthy server | check `healthy` count; stop the fault by waiting it out |
 | ML row says `ml-fallback` | no model loaded | `docker compose logs balancer`; artifacts are committed, restart fixes it |
+| logger rows 0, `dropped` climbing | no active run | start one with `/admin/run?run_id=demo` before traffic |
 | traffic tool slow | host client-bound, ~60-70 req/s max | it is a demo driver, not the benchmark; numbers come from Locust |

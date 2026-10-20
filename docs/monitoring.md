@@ -75,9 +75,11 @@ the serving numbers. Mean decision cost was 1.57 ms over 2,601 decisions.
 The decision-cost *maximum* is a different story: it was 20.4 ms in that run,
 and 19.5 ms before the `from_pylist` change. It is a single stall, not a
 distribution - the mean is unchanged, and nothing in the logger explains why
-exactly one decision in 2,601 took 20 ms. It is most plausibly a GC or
-scheduler pause on this host; the honest statement is that the mean is the
-measured routing overhead and the max is an unexplained one-off.
+exactly one decision in 2,601 took 20 ms. The Phase 7 matrix later recorded one
+126.72 ms decision across the ML cells, with a mean of 1.96 ms; that is the tail
+quoted in `docs/results.md`. Both are most plausibly GC or scheduler pauses on
+this host; the honest statement is that the mean is the measured routing
+overhead and the max is an unexplained one-off.
 
 ## The drift guard
 
@@ -176,8 +178,10 @@ request.
 
 - **Live MAE is not the training MAE.** The training number is measured on the
   collected campaign; serving traffic here is lighter (`/ping` dominates), so
-  live MAE can be *better* than the training report. The guard is a
-  relative-change detector, not a re-validation.
+  live MAE can be *better* than the training report (0.4603 in the demo above).
+  It can also be much worse: the Phase 7 matrix measured 1.394 in steady and
+  2.421 in failure against 0.5868 offline. The guard is a relative-change
+  detector, not a re-validation.
 - **The window is a request count, not time.** 200 observations is a few
   seconds at demo rates; a slower deployment would need a larger window and a
   longer minimum.
