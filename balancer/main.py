@@ -9,6 +9,7 @@ Phase 2 Implementation:
 """
 
 import asyncio
+import collections
 import os
 import sys
 import time
@@ -24,6 +25,7 @@ from fastapi.responses import HTMLResponse, Response, JSONResponse
 from balancer.algorithms import get_algorithm, algorithm_names, Algorithm
 from balancer.interfaces import RequestContext, ServerChoice, ServerInfo, RequestType
 from balancer.collector import MetricsCollector
+from balancer.decision_log import make_decision_logger
 from balancer.logger import RequestLogger
 from balancer import resilience
 
@@ -36,6 +38,12 @@ client: Optional[httpx.AsyncClient] = None
 algorithm_instance: Optional[Algorithm] = None
 collector: Optional[MetricsCollector] = None
 req_logger: Optional[RequestLogger] = None
+decision_logger: Optional[RequestLogger] = None
+
+# Recent routing decisions, newest last. The decision log file follows the run
+# lifecycle and only exists inside a run; this ring is always on, so the
+# dashboard can show predicted-versus-actual without a run being started.
+RECENT_DECISIONS: "collections.deque[Dict[str, Any]]" = collections.deque(maxlen=100)
 
 # Resilience counters, surfaced through /stats. They count routing decisions and
 # retries rather than requests: a stale-feed decision can also happen on the
@@ -45,7 +53,7 @@ STATS = {"retries": 0, "stale_routing": 0}
 
 def load_config():
     """Load configuration from YAML file."""
-    global ALGORITHM, SERVERS, SLA_MS, collector, req_logger
+    global ALGORITHM, SERVERS, SLA_MS, collector, req_logger, decision_logger
     
     try:
         with open(CONFIG_PATH, 'r') as f:
@@ -82,6 +90,7 @@ def load_config():
     collector = MetricsCollector(SERVERS)
     run_id = config.get("run_id", f"run_{int(time.time())}")
     req_logger = RequestLogger(run_id=run_id)
+    decision_logger = make_decision_logger(run_id=run_id)
 
 
 async def init():
@@ -106,17 +115,21 @@ async def init():
         await collector.start()
     if req_logger:
         await req_logger.start()
+    if decision_logger:
+        await decision_logger.start()
         
     print(f"Loaded balancer config: algorithm={ALGORITHM}, servers={len(SERVERS)}")
 
 
 async def close():
     """Clean up resources."""
-    global client, collector, req_logger
+    global client, collector, req_logger, decision_logger
     if collector:
         await collector.stop()
     if req_logger:
         await req_logger.stop()
+    if decision_logger:
+        await decision_logger.stop()
     if client:
         await client.aclose()
 
@@ -167,31 +180,61 @@ async def start_run(run_id: str):
     Seal the current Parquet file and begin a new run.
 
     Call this before each traffic run so every file is complete (footer
-    written), independently readable, and tagged with its own run_id.
+    written), independently readable, and tagged with its own run_id. The
+    decision log rotates with it, so a run's decisions and its requests can be
+    joined on (run_id, timestamp).
     """
-    if req_logger is None:
+    if req_logger is None or decision_logger is None:
         raise HTTPException(status_code=503, detail="Logger not initialised")
     if not run_id or "/" in run_id or "\\" in run_id:
         raise HTTPException(status_code=400, detail="Invalid run_id")
     info = await req_logger.start_run(run_id)
-    return {"status": "ok", **info}
+    decisions = await decision_logger.start_run(run_id)
+    return {"status": "ok", **info, "decisions": decisions}
 
 
 @app.post("/admin/seal")
 async def seal_run():
-    """Flush and close the current Parquet file so it can be collected."""
-    if req_logger is None:
+    """Flush and close the current Parquet files so they can be collected."""
+    if req_logger is None or decision_logger is None:
         raise HTTPException(status_code=503, detail="Logger not initialised")
     info = await req_logger.seal()
-    return {"status": "ok", "sealed": info}
+    decisions = await decision_logger.seal()
+    return {"status": "ok", "sealed": info, "decisions": decisions}
 
 
 @app.get("/admin/logger")
 async def logger_status():
-    """Inspect the logger: current file, row counts, and sealed runs."""
-    if req_logger is None:
+    """Inspect the loggers: current files, row counts, and sealed runs."""
+    if req_logger is None or decision_logger is None:
         raise HTTPException(status_code=503, detail="Logger not initialised")
-    return req_logger.status()
+    return {**req_logger.status(), "decisions": decision_logger.status()}
+
+
+@app.post("/admin/drift")
+async def configure_drift(
+    threshold: Optional[float] = None,
+    window: Optional[int] = None,
+    min_samples: Optional[int] = None,
+):
+    """
+    Re-tune the drift guard at runtime.
+
+    Being able to lower the threshold is how the demotion path is demonstrated
+    honestly: the guard then demotes a *healthy* model on real traffic, the
+    reason on every decision changes to a least-connections fallback, and
+    raising the threshold again promotes it back after a clean window.
+    """
+    guard = getattr(algorithm_instance, "drift", None)
+    if guard is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"algorithm '{ALGORITHM}' has no drift guard (only 'ml' does)",
+        )
+    return {
+        "status": "ok",
+        "drift": guard.configure(threshold=threshold, window=window, min_samples=min_samples),
+    }
 
 
 @app.get("/admin/algorithm")
@@ -279,6 +322,29 @@ async def stats():
             "stale_routing": STATS["stale_routing"],
             "circuits_open": [s.server_id for s in SERVERS if resilience.circuit_open(s, now)],
             "circuit_opens": sum(s.circuit_opens for s in SERVERS),
+        },
+        # Newest last, rounded for the wire. The full-precision rows go to the
+        # decision log; this is what the dashboard's predicted-vs-actual table
+        # and a demo read.
+        "decisions": {
+            "logged": len(RECENT_DECISIONS),
+            "recent": [
+                {
+                    "timestamp": round(row["timestamp"], 3),
+                    "server_id": row["server_id"],
+                    "reason": row["reason"],
+                    "predicted_ms": (
+                        round(row["predicted_ms"], 1)
+                        if row["predicted_ms"] is not None
+                        else None
+                    ),
+                    "actual_ms": round(row["actual_ms"], 1),
+                    "status": row["status"],
+                    "retries": row["retries"],
+                    "model_driven": row["model_driven"],
+                }
+                for row in list(RECENT_DECISIONS)[-15:]
+            ],
         },
     }
 
@@ -421,6 +487,13 @@ async def proxy(request: Request, path: str):
             "status": status,
             "content": content,
             "headers": response_headers,
+            # Decision detail, for the decision log and the drift guard.
+            "attempt": attempt,
+            "reason": choice.reason,
+            "predicted_ms": choice.predicted_rt_ms,
+            "model_driven": bool(choice.model_driven),
+            "inflight_at_decision": int(getattr(server, "inflight", 0)),
+            "feed_age_ms": (resilience.feed_age(SERVERS) or 0.0) * 1000.0,
         }
 
         # One retry, on a different server, for server-side failures only. A
@@ -449,6 +522,40 @@ async def proxy(request: Request, path: str):
             })
         except Exception as exc:
             print(f"logger failed: {exc}")
+
+    # One decision row per client request: what was chosen, why, and what the
+    # client actually waited. Only the always-on copy is written outside a run.
+    entry = {
+        "timestamp": request_started,
+        "request_id": context.request_id,
+        "algorithm": ALGORITHM,
+        "server_id": final["server_id"],
+        "reason": final["reason"],
+        "predicted_ms": (
+            float(final["predicted_ms"]) if final["predicted_ms"] is not None else None
+        ),
+        "actual_ms": _f(duration_ms),
+        "status": int(final["status"]),
+        "retries": int(final["attempt"]),
+        "model_driven": final["model_driven"],
+        "inflight": final["inflight_at_decision"],
+        "feed_age_ms": round(final["feed_age_ms"], 1),
+        "req_type": context.req_type.value,
+    }
+    RECENT_DECISIONS.append(entry)
+    if decision_logger is not None:
+        try:
+            await decision_logger.log(dict(entry))
+        except Exception as exc:
+            print(f"decision logger failed: {exc}")
+
+    # Feedback for algorithms that monitor themselves. A retried request is
+    # excluded: its latency contains a failed first attempt, so it is not an
+    # observation about the prediction that was made.
+    if final["attempt"] == 0:
+        algorithm_instance.observe_outcome(
+            entry["predicted_ms"], entry["actual_ms"], entry["status"]
+        )
 
     if final["content"] is None:
         raise HTTPException(

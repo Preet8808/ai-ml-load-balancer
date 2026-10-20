@@ -10,8 +10,9 @@ A Layer-7 HTTP load balancer that uses machine learning to predict per-server re
 | `backend/` | FastAPI/Flask backend apps with `/metrics` and `/health` endpoints |
 | `agent/` | psutil metrics agent running inside each backend container |
 | `ml/` | Feature engineering, model training, inference |
-| `bench/` | Benchmark suites, Locust traffic scripts, run matrix |
+| `bench/` | Benchmark suites, Locust traffic scripts, resilience/drift checks |
 | `docs/` | Hypotheses, design docs, architecture diagrams |
+| `logs/`, `decisions/` | Per-run request and decision Parquet files (generated, gitignored) |
 
 ## Quick Start
 
@@ -192,6 +193,24 @@ backend quota can serve - produced no errors, no restart and +3% RSS
 (141.9 -> 146.6 MiB). Overload appeared as queueing (p50 625 ms, p95 902 ms),
 not failure. `docs/resilience.md` has the raw output and the trade-offs.
 
+### Monitoring: decision log and drift guard
+
+Every decision is written to its own Parquet file (`decisions/`, one run per
+file) with the reason, the prediction, the outcome, the retries, the metrics
+age and whether a model made the call. It joins to the 16-column request log on
+`(run_id, timestamp)` - the 16-column schema has no id - and was verified exact
+on a 2,601-request run. `/stats.decisions.recent` feeds a predicted-vs-actual
+table on the dashboard.
+
+The drift guard scores the served server's prediction against the outcome in
+log space - the metric the model was selected on - and demotes the model to
+least-connections when the rolling MAE exceeds 1.0 (the naive baseline is
+1.27, XGBoost trained at 0.59). It keeps shadow-scoring while demoted, clears
+the window on demotion, and promotes itself back after a clean full window.
+Measured live: `live MAE(log) 0.4603` on ordinary traffic; lowering the
+threshold demoted it (`drift_routed` 112, every reason `drift-fallback`), and
+restoring it promoted it back (`promotions 1`). See `docs/monitoring.md`.
+
 ## Milestones
 
 | Milestone | Week | Focus | Status |
@@ -202,29 +221,26 @@ not failure. `docs/resilience.md` has the raw output and the trade-offs.
 | M4 | 6 | Dataset v1 (200k+ rows) | done - 218,011 rows, 18 cells |
 | M5 | 8 | Model beats naive baseline by 30%+ MAE | done - +53.9% (XGBoost) |
 | M6 | 9 | MVP: ML balancer demo | partial - stale-feed fallback and routing overhead met; burst-vs-least_conn measured and **not met** (p95 1.76x worse) |
-| M7 | 11 | Feature freeze, all tests green | partial - tests green, stress/chaos/slow start measured; decision log, drift guard, `ml_predictive`/`ml_herd` split and reference configs still open |
+| M7 | 11 | Feature freeze, all tests green | partial - tests green; stress, chaos, slow start, decision log and drift guard done; `ml_predictive`/`ml_herd` split and reference configs still open |
 | M8 | 12 | Raw results complete | planned |
 | M9 | 14 | Final submission | planned |
 
 See `docs/dataset.md` for the per-cell table, the signal gate, the model
 comparison and the M5 verdict, `docs/serving.md` for the serving path and the
-A/B evidence, and `docs/resilience.md` for the safeguards and their
-measurements.
+A/B evidence, `docs/resilience.md` for the safeguards, and
+`docs/monitoring.md` for the decision log and drift guard.
 
 ### Open items against the plan
 
 Phase 5 and 6 name a few things this repo does not have yet. They are listed
 rather than implied to be done:
 
-- **Drift guard.** No rolling-MAE monitor that demotes a model whose live
-  error grows; served predictions are not persisted, so it needs a decision
-  log first.
 - **`ml_predictive` vs `ml_herd`.** Herd protection is built into `ml` (the
   in-flight queue term) rather than exposed as two selectable algorithms.
 - **Dashboard depth.** It shows per-server CPU, in-flight, EWMA, p95, errors,
-  circuit state, feed age, retries and stale-routing counts, and the ML
-  artifact/decision counters, but not predicted-vs-actual, a decision log, or
-  p95 over time.
+  circuit state, feed age, retries, stale-routing counts, the ML
+  artifact/decision counters, drift state and the last 15 decisions with
+  predicted-vs-actual, but not p95 over time.
 - **Reference configs.** No Nginx or HAProxy configuration to compare a mature
   proxy against.
 - **Phase 7 matrix.** The 5-algorithm x 5-scenario x 5-repeat campaign has not

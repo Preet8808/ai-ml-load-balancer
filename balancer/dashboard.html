@@ -57,6 +57,20 @@
   .badge.ok { background: rgba(62,207,142,.15); color: var(--good); }
   .badge.off { background: rgba(255,93,93,.15); color: var(--bad); }
   .badge.warn { background: rgba(255,176,32,.15); color: var(--warn); }
+  table.decisions { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.decisions th {
+    text-align: left; color: var(--muted); font-weight: 500;
+    text-transform: uppercase; font-size: 10px; letter-spacing: .6px;
+    padding: 4px 8px; border-bottom: 1px solid var(--line);
+  }
+  table.decisions td {
+    padding: 4px 8px; border-bottom: 1px solid var(--line);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  table.decisions td.reason {
+    color: var(--muted); max-width: 300px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
   .metrics { margin-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
   .metrics .k { color: var(--muted); }
   .metrics .v { text-align: right; font-variant-numeric: tabular-nums; }
@@ -100,6 +114,11 @@
 </div>
 
 <div class="row" id="servers"></div>
+
+<div class="panel" style="margin-top:14px">
+  <div class="label">Recent decisions <span style="text-transform:none;letter-spacing:0">— the prediction against what the client actually waited</span></div>
+  <table class="decisions" id="decisions"></table>
+</div>
 
 <script>
 const POLL_MS = 1000;
@@ -186,7 +205,46 @@ function renderMl(s) {
     <div><span>trained on</span> ${ml.trained_on || "—"} (${ml.train_rows ? ml.train_rows.toLocaleString() + " rows" : "—"})</div>
     <div><span>status</span>
       <b style="color:${serving ? "#3ecf8e" : ml.loaded ? "#ffb020" : "#ff5d5d"}">
-        ${serving ? "predictions drive routing" : ml.loaded ? "predicting with fallbacks" : "heuristic fallback"}</b></div>`;
+        ${serving ? "predictions drive routing" : ml.loaded ? "predicting with fallbacks" : "heuristic fallback"}</b></div>
+    ${ml.drift ? `<div><span>drift guard</span>
+      live MAE ${ml.drift.live_mae_log != null ? ml.drift.live_mae_log.toFixed(3) : "—"}
+      vs threshold ${ml.drift.threshold}
+      ${ml.drift.demoted ? `<b style="color:#ff5d5d"> — DEMOTED, routing on least-connections</b>` : ""}</div>
+    <div><span>&nbsp;</span>
+      window ${ml.drift.samples_in_window}/${ml.drift.window}
+      · demotions ${ml.drift.demotions}
+      · promotions ${ml.drift.promotions}
+      · drift-routed ${ml.drift_routed}</div>` : ""}`;
+}
+
+function renderDecisions(s) {
+  const table = document.getElementById("decisions");
+  const rows = (s.decisions && s.decisions.recent) || [];
+  if (!rows.length) {
+    table.innerHTML = `<tr><td class="reason">no decisions yet — send some traffic</td></tr>`;
+    return;
+  }
+  const head = `<tr><th>time</th><th>server</th><th>predicted</th><th>actual</th>
+      <th>error</th><th>status</th><th>model</th><th>reason</th></tr>`;
+  table.innerHTML = head + rows.slice().reverse().map(r => {
+    // The log-space error is the metric the guard scores, so showing it next
+    // to the raw pair keeps the dashboard and the guard consistent.
+    let error = "—";
+    if (r.predicted_ms != null && r.actual_ms != null) {
+      error = Math.abs(Math.log1p(r.actual_ms) - Math.log1p(r.predicted_ms)).toFixed(3);
+    }
+    const time = new Date(r.timestamp * 1000).toLocaleTimeString();
+    return `<tr>
+      <td>${time}</td>
+      <td>${r.server_id}</td>
+      <td>${r.predicted_ms != null ? r.predicted_ms.toFixed(1) + " ms" : "—"}</td>
+      <td>${r.actual_ms.toFixed(1)} ms</td>
+      <td>${error}</td>
+      <td style="color:${r.status >= 400 ? "#ff5d5d" : "inherit"}">${r.status}</td>
+      <td>${r.model_driven ? "yes" : "no"}</td>
+      <td class="reason" title="${r.reason}">${r.reason}</td>
+    </tr>`;
+  }).join("");
 }
 
 function renderPicker(names) {
@@ -218,6 +276,7 @@ async function tick() {
     renderTiles(s);
     renderServers(s);
     renderMl(s);
+    renderDecisions(s);
     document.getElementById("status").innerHTML =
       `<span class="dot"></span>live — ${new Date().toLocaleTimeString()}`;
   } catch (e) {

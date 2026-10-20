@@ -48,6 +48,7 @@ model_*.pkl
 trained_models/
 results/
 logs/
+decisions/
 
 # The Random Forest is trained as a negative result (see docs/dataset.md): 59 MB
 # for a model the router never loads, because it is less accurate than XGBoost

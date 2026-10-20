@@ -25,18 +25,22 @@ and /stats reports which of the two is happening.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from balancer.algorithms import LeastConnections
+from balancer.drift import DriftGuard
 from balancer.interfaces import (
     Algorithm,
     RequestContext,
     ServerChoice,
     ServerInfo,
 )
+
+logger = logging.getLogger(__name__)
 
 # Predictions within this many milliseconds of the best are treated as ties.
 # The model is not accurate to better than this, and without the tie-break a
@@ -101,10 +105,12 @@ class MLRouter(Algorithm):
         self.load_error: Optional[str] = None
         self.decisions = 0
         self.fallbacks = 0
+        self.drift_routed = 0
         self.decision_ms_total = 0.0
         self.decision_ms_max = 0.0
         self.decision_ms_samples = 0
         self._fallback = LeastConnections()
+        self.drift = DriftGuard()
         self._model_dir = Path(model_dir) if model_dir else _model_dir()
         self._load()
 
@@ -176,6 +182,8 @@ class MLRouter(Algorithm):
             "load_error": self.load_error,
             "decisions": self.decisions,
             "fallbacks": self.fallbacks,
+            "drift_routed": self.drift_routed,
+            "drift": self.drift.status(),
             "decision_ms_mean": (
                 round(self.decision_ms_total / self.decision_ms_samples, 2)
                 if self.decision_ms_samples
@@ -231,6 +239,23 @@ class MLRouter(Algorithm):
                 for prediction, load in zip(predicted_ms, loads)
             ]
 
+            if self.drift.demoted:
+                # The guard has demoted the model. Route on least-connections,
+                # but report the prediction for the server that actually
+                # serves, so the guard keeps receiving evidence and can
+                # promote the model back on its own.
+                choice = self._fallback.choose_server(request, healthy)
+                if choice is None:
+                    return None
+                index = healthy.index(choice.server)
+                self.drift_routed += 1
+                return ServerChoice(
+                    server=choice.server,
+                    reason=f"drift-fallback(least_conn, pred {predicted_ms[index]:.1f}ms)",
+                    predicted_rt_ms=float(predicted_ms[index]),
+                    model_driven=False,
+                )
+
             best = min(range(len(score_ms)), key=score_ms.__getitem__)
             tied = [i for i in range(len(healthy)) if score_ms[i] <= score_ms[best] + TIE_MS]
         except Exception as exc:
@@ -250,7 +275,29 @@ class MLRouter(Algorithm):
             server=server,
             reason=f"ml(pred {predicted_ms[index]:.1f}ms, inflight {int(server.inflight)})",
             predicted_rt_ms=float(predicted_ms[index]),
+            model_driven=True,
         )
+
+    def observe_outcome(
+        self,
+        predicted_rt_ms: Optional[float],
+        actual_ms: float,
+        status: int,
+    ) -> None:
+        """
+        Feed the drift guard the prediction and the outcome it produced.
+
+        Only successful requests are scored: an error page's latency says
+        nothing about the model, and a retried request's latency contains a
+        failed first attempt (the proxy filters both before calling here).
+        """
+        if status >= 400 or predicted_rt_ms is None:
+            return
+        event = self.drift.observe(predicted_rt_ms, actual_ms)
+        if event == "promoted":
+            logger.info("drift guard promoted the model back into routing")
+        elif event == "demoted":
+            logger.info("drift guard demoted the model; routing on least-connections")
 
     def _fall_back(
         self,

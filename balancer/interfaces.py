@@ -114,6 +114,10 @@ class ServerChoice:
     server: ServerInfo
     reason: str = ""
     predicted_rt_ms: float | None = None
+    # True only when a model made this decision. A prediction may be present
+    # without it: the drift guard keeps shadow-scoring the server that served,
+    # to decide whether to promote the model back.
+    model_driven: bool = False
 
 
 class Algorithm(ABC):
@@ -139,6 +143,22 @@ class Algorithm(ABC):
         suitable server is available (the proxy should respond with 503).
         """
         raise NotImplementedError
+
+    def observe_outcome(
+        self,
+        predicted_rt_ms: float | None,
+        actual_ms: float,
+        status: int,
+    ) -> None:
+        """
+        Optional feedback hook: how the served request actually turned out.
+
+        The proxy calls this after every client request, for whichever
+        algorithm is live. Only algorithms that learn or monitor themselves
+        need to override it - the ML router feeds its drift guard here - and
+        the default is deliberately a no-op so the heuristics stay stateless.
+        """
+        return None
 
 
 # ---------------------------------------------------------------------------

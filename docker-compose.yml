@@ -22,6 +22,10 @@ services:
       - ALGORITHM=round_robin
     volumes:
       - ./logs:/app/logs
+      # Decision log: written on the same run lifecycle as the request log, so
+      # it is mounted the same way. Kept out of the image for the same reason
+      # as logs - it is output, not source.
+      - ./decisions:/app/decisions
       # Live code, so a router change does not need an image rebuild. A rebuild
       # installs every wheel with --no-cache-dir, which on a slow connection
       # takes tens of minutes, and no measurement should have to wait for that.
