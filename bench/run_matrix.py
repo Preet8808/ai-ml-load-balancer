@@ -255,12 +255,27 @@ def run_one(scenario: str, algorithm: str, repeat: int, args) -> dict:
         "users": users,
         "seed": args.seed,
         "commit": args.commit,
+        "drift_threshold": args.drift_threshold,
     }
     print(f"\n  -> {scenario} / {algorithm} (repeat {repeat}, {users} users, {args.duration}s)")
 
     if not set_algorithm(algorithm):
         result.update(status="failed", error=f"could not select {algorithm}")
         return result
+
+    if algorithm.startswith("ml"):
+        # The experiment compares routing policies. The drift guard is a
+        # separate safety layer, and on a cold ramp it can demote the model
+        # within its 200-sample window - which would silently turn this cell
+        # into a least_conn measurement still labelled `ml`. The threshold is
+        # therefore held above any plausible MAE for the run. Its own behaviour
+        # is measured separately (docs/monitoring.md) and the live MAE is
+        # recorded with every run so the model's real error is still visible.
+        try:
+            _post("/admin/drift", threshold=args.drift_threshold)
+        except Exception as exc:  # noqa: BLE001
+            result.update(status="failed", error=f"could not pin drift threshold: {exc}")
+            return result
 
     # -- warm-up, discarded -------------------------------------------------
     if args.warmup > 0:
@@ -386,6 +401,9 @@ def main() -> None:
     parser.add_argument("--fault-server", default=FAULT_SERVER)
     parser.add_argument("--fault-ms", type=int, default=400)
     parser.add_argument("--fault-error-rate", type=float, default=0.35)
+    parser.add_argument("--drift-threshold", type=float, default=10.0,
+                        help="drift guard threshold for ml cells; 10 keeps the policy "
+                             "being measured, 1.0 is the shipped default")
     parser.add_argument("--retry-failed", action="store_true",
                         help="rerun cells whose only recorded attempt failed")
     args = parser.parse_args()
@@ -425,6 +443,7 @@ def main() -> None:
         "algorithms": args.algorithms,
         "scenarios": args.scenarios,
         "scenario_specs": SCENARIOS,
+        "drift_threshold_for_ml": args.drift_threshold,
         "total_cells": len(plan),
         "already_ok": len(ok_cells),
         "planned_this_session": len(todo),
