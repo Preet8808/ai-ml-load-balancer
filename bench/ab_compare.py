@@ -107,13 +107,20 @@ def ml_status() -> dict | None:
 
 
 def run_one(profile: str, policy: str, repeat: int, duration: int, users: int,
-            fault_server: str, fault_ms: int, fault_error_rate: float) -> RunResult:
+            fault_server: str, fault_ms: int, fault_error_rate: float,
+            drift_threshold: float | None = None) -> RunResult:
     run_id = f"ab_{profile}_{policy}_{repeat}"
     result = RunResult(profile=profile, policy=policy, repeat=repeat, run_id=run_id, file="")
 
     print(f"\n  -> {profile} / {policy}  (repeat {repeat}, {users} users, {duration}s)")
     if not set_algorithm(policy):
         raise RuntimeError(f"could not select algorithm {policy}")
+
+    if drift_threshold is not None and policy.startswith("ml"):
+        # Same reason as the Phase 7 matrix: a guard demotion would turn this
+        # cell into a least_conn measurement still labelled ml. The herd
+        # ablation compares routing rules, not the safety layer.
+        _post("/admin/drift", threshold=drift_threshold)
 
     if profile == "degraded":
         degrade_backend(fault_server, fault_ms, fault_error_rate, duration + 20)
@@ -282,6 +289,8 @@ def main() -> None:
     parser.add_argument("--fault-server", default="backend3")
     parser.add_argument("--fault-ms", type=int, default=400)
     parser.add_argument("--fault-error-rate", type=float, default=0.35)
+    parser.add_argument("--drift-threshold", type=float, default=None,
+                        help="pin the drift guard for ml policies (matrix uses 10)")
     args = parser.parse_args()
 
     if len(args.policies) != 2 and args.repeats:
@@ -323,6 +332,7 @@ def main() -> None:
             results.append(run_one(
                 profile, policy, repeat, args.duration, users,
                 args.fault_server, args.fault_ms, args.fault_error_rate,
+                args.drift_threshold,
             ))
         except Exception as exc:
             print(f"     run failed: {exc}")

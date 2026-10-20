@@ -272,7 +272,7 @@ function renderLatency(s) {
   legend.innerHTML =
     `p95 <b>${lat.p95.toFixed(0)} ms</b> · p50 <i>${lat.p50.toFixed(0)} ms</i>` +
     ` · ${lat.samples.toLocaleString()} requests in the window` +
-    ` · ${LATENCY_HISTORY.length}s of history`;
+    ` · ${LATENCY_HISTORY.length} polls plotted`;
 }
 
 function renderDecisions(s) {

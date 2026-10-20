@@ -122,6 +122,28 @@ def pct_change(a: float, b: float) -> float:
     return (a - b) / b * 100.0 if b else float("nan")
 
 
+def cpu_imbalance(path: Path, cache: dict[str, float | None]) -> float | None:
+    """
+    Standard deviation of per-server mean CPU, in percentage points.
+
+    The log records the CPU of the server each request was routed to, not all
+    four servers at every instant. Averaging each server's own rows and taking
+    the standard deviation across servers is the closest honest proxy for the
+    plan's "std dev of CPU% across servers"; it is time-weighted by traffic
+    rather than sampled on a fixed clock, and the results document says so.
+    """
+    if path.name in cache:
+        return cache[path.name]
+    value: float | None = None
+    if path.exists():
+        frame = pd.read_parquet(path, columns=["server_id", "srv_cpu_pct"])
+        means = frame.dropna(subset=["srv_cpu_pct"]).groupby("server_id")["srv_cpu_pct"].mean()
+        if len(means) >= 2:
+            value = float(means.std(ddof=0))
+    cache[path.name] = value
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
@@ -162,7 +184,7 @@ def fmt_ci(mean: float, lo: float, hi: float) -> str:
 # Tables
 # ---------------------------------------------------------------------------
 
-def summary_tables(rows: list[dict]) -> str:
+def summary_tables(rows: list[dict], raw: Path) -> str:
     out: list[str] = []
     out.append("### Latency by scenario (p95 ms, mean of 5 runs with bootstrap 95% CI)\n")
     header = "| Scenario | " + " | ".join(LABELS[a] for a in ALGORITHMS) + " |"
@@ -224,6 +246,54 @@ def summary_tables(rows: list[dict]) -> str:
         gen_cell = f"{statistics.mean(generator):.0f}" if generator else "-"
         out.append(f"| {LABELS[algorithm]} | {decision_cell} | {max_cell} | {cpu_cell} | {gen_cell} |")
 
+    out.append("\n### CPU imbalance (std dev of per-server mean CPU, percentage points)\n")
+    out.append("| Scenario | " + " | ".join(LABELS[a] for a in ALGORITHMS) + " |")
+    out.append("|---|" + "---|" * len(ALGORITHMS))
+    cache: dict[str, float | None] = {}
+    for scenario in SCENARIOS:
+        cells = []
+        for algorithm in ALGORITHMS:
+            values = [
+                cpu_imbalance(raw / r["file"], cache)
+                for r in cell(rows, scenario, algorithm)
+            ]
+            values = [v for v in values if v is not None]
+            cells.append(f"{statistics.mean(values):.1f}" if values else "-")
+        out.append(f"| {SCENARIO_TITLES[scenario]} | " + " | ".join(cells) + " |")
+
+    out.append("\n### Routing share (mean percent of requests per server)\n")
+    servers = ["backend1", "backend2", "backend3", "backend4"]
+    out.append("| Scenario | Algorithm | " + " | ".join(servers) + " |")
+    out.append("|---|---|" + "---|" * len(servers))
+    for scenario in SCENARIOS:
+        for algorithm in ALGORITHMS:
+            group = cell(rows, scenario, algorithm)
+            if not group:
+                continue
+            means = []
+            for server in servers:
+                values = [r.get("share", {}).get(server, 0.0) for r in group]
+                means.append(f"{statistics.mean(values):.1f}")
+            out.append(f"| {SCENARIO_TITLES[scenario]} | {LABELS[algorithm]} | "
+                       + " | ".join(means) + " |")
+
+    out.append("\n### Model state during ML cells (mean over the 5 runs)\n")
+    out.append("| Scenario | live MAE(log) | decisions | fallbacks | drift-routed |")
+    out.append("|---|---|---|---|---|")
+    for scenario in SCENARIOS:
+        group = [r for r in cell(rows, scenario, "ml") if r.get("ml")]
+        if not group:
+            continue
+        maes = [r["ml"]["drift"]["live_mae_log"] for r in group
+                if (r["ml"].get("drift") or {}).get("live_mae_log") is not None]
+        out.append(
+            f"| {SCENARIO_TITLES[scenario]} | "
+            f"{statistics.mean(maes):.3f} | "
+            f"{statistics.mean([r['ml'].get('decisions', 0) for r in group]):.0f} | "
+            f"{sum(r['ml'].get('fallbacks', 0) for r in group)} | "
+            f"{sum(r['ml'].get('drift_routed', 0) for r in group)} |"
+        )
+
     return "\n".join(out) + "\n"
 
 
@@ -257,15 +327,17 @@ def hypothesis_results(rows: list[dict]) -> tuple[str, dict]:
             })
 
     adjusted = holm([t["welch_p"] for t in tests])
-    for test, adj in zip(tests, adjusted):
+    adjusted_mw = holm([t["mw_p"] for t in tests])
+    for test, adj, adj_mw in zip(tests, adjusted, adjusted_mw):
         test["welch_p_holm"] = adj
+        test["mw_p_holm"] = adj_mw
 
     # H1: lower p95 than the best traditional baseline, in at least 3 of 5
     # scenarios, with a significant Holm-adjusted test against that baseline.
     wins = 0
     out.append("### H1 - p95 against the best traditional baseline per scenario\n")
-    out.append("| Scenario | Best baseline | ML p95 | Baseline p95 | Change | Welch p (Holm) | Signif. |")
-    out.append("|---|---|---|---|---|---|---|")
+    out.append("| Scenario | Best baseline | ML p95 | Baseline p95 | Change | Welch p (Holm) | MW p (Holm) | Signif. |")
+    out.append("|---|---|---|---|---|---|---|---|")
     for scenario in SCENARIOS:
         ml = series(cell(rows, scenario, "ml"), "p95")
         baselines = {
@@ -281,13 +353,15 @@ def hypothesis_results(rows: list[dict]) -> tuple[str, dict]:
         )
         if test is None:
             continue
-        significant = test["welch_p_holm"] < 0.05 and test["change_pct"] < 0
+        significant = (
+            test["welch_p_holm"] < 0.05 or test["mw_p_holm"] < 0.05
+        ) and test["change_pct"] < 0
         wins += int(significant)
         out.append(
             f"| {SCENARIO_TITLES[scenario]} | {LABELS[best]} | "
             f"{statistics.mean(ml):.0f} | {statistics.mean(baselines[best]):.0f} | "
             f"{test['change_pct']:+.1f}% | {test['welch_p_holm']:.4f} | "
-            f"{'win' if significant else 'no'} |"
+            f"{test['mw_p_holm']:.4f} | {'win' if significant else 'no'} |"
         )
     out.append(
         f"\n**H1: {'met' if wins >= 3 else 'not met'}** - ML is significantly better on "
@@ -333,14 +407,15 @@ def hypothesis_results(rows: list[dict]) -> tuple[str, dict]:
             f"(slow start included).\n"
         )
 
-    out.append("\n### Welch tests, all scenario/baseline pairs\n")
-    out.append("| Scenario | Baseline | Change | Welch p | Holm p | MW p |")
-    out.append("|---|---|---|---|---|---|")
+    out.append("\n### Welch and Mann-Whitney tests, all scenario/baseline pairs\n")
+    out.append("| Scenario | Baseline | Change | Welch p | Welch Holm | MW p | MW Holm |")
+    out.append("|---|---|---|---|---|---|---|")
     for test in sorted(tests, key=lambda t: (SCENARIOS.index(t["scenario"]), t["baseline"])):
         out.append(
             f"| {SCENARIO_TITLES[test['scenario']]} | {LABELS[test['baseline']]} | "
             f"{test['change_pct']:+.1f}% | {test['welch_p']:.4f} | "
-            f"{test['welch_p_holm']:.4f} | {test['mw_p']:.4f} |"
+            f"{test['welch_p_holm']:.4f} | {test['mw_p']:.4f} | "
+            f"{test['mw_p_holm']:.4f} |"
         )
 
     return "\n".join(out) + "\n", {
@@ -459,6 +534,48 @@ def chart_burst(rows: list[dict], raw: Path, path: Path) -> None:
     plt.close(figure)
 
 
+def chart_burst_cpu(rows: list[dict], raw: Path, path: Path) -> None:
+    """Per-server CPU through the burst, from the snapshot attached to each routed request."""
+    figure, axis = plt.subplots(figsize=(7.2, 3.6))
+    bucket_s = 2.0
+    colors = {
+        "backend1": "#3f7fbf",
+        "backend2": "#4aa06a",
+        "backend3": "#c0392b",
+        "backend4": "#b08a5a",
+    }
+    buckets: dict[int, dict[str, list[float]]] = {}
+    for row in cell(rows, "burst", "ml"):
+        file = raw / row["file"]
+        if not file.exists():
+            continue
+        frame = pd.read_parquet(
+            file, columns=["timestamp", "server_id", "srv_cpu_pct"]
+        ).dropna()
+        start = frame["timestamp"].min()
+        frame["bucket"] = ((frame["timestamp"] - start) // bucket_s * bucket_s).astype(int)
+        for (bucket, server), group in frame.groupby(["bucket", "server_id"]):
+            buckets.setdefault(int(bucket), {}).setdefault(server, []).extend(
+                group["srv_cpu_pct"].tolist()
+            )
+    for server, color in colors.items():
+        points = sorted(
+            (bucket, statistics.mean(values[server]))
+            for bucket, values in buckets.items()
+            if len(values.get(server, [])) >= 10
+        )
+        if points:
+            axis.plot([p[0] for p in points], [p[1] for p in points],
+                      label=server, color=color, linewidth=1.4)
+    axis.set_xlabel("Seconds into the run")
+    axis.set_ylabel("CPU (% of quota)")
+    axis.set_title("Burst: per-server CPU over time, ML runs pooled")
+    axis.legend(fontsize=8, ncol=4)
+    figure.tight_layout()
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+
+
 def chart_failure(rows: list[dict], raw: Path, path: Path) -> None:
     figure, axis = plt.subplots(figsize=(7.2, 3.6))
     bucket_s = 1.0
@@ -545,7 +662,7 @@ def main() -> None:
     images.mkdir(parents=True, exist_ok=True)
     raw = Path(args.raw)
 
-    tables = summary_tables(rows)
+    tables = summary_tables(rows, raw)
     hypotheses, summary = hypothesis_results(rows)
     report = "# Phase 7 matrix analysis\n\n" + tables + "\n" + hypotheses
     (out_dir / "tables.md").write_text(report, encoding="utf-8")
@@ -558,9 +675,11 @@ def main() -> None:
         fields = [
             "run_id", "scenario", "algorithm", "repeat", "rows", "span_s", "req_s",
             "p50", "p95", "p99", "max_ms", "error_pct", "sla_violation_pct", "jain",
-            "decision_ms_mean", "decision_ms_max", "balancer_cpu_pct", "generator_cpu_pct",
+            "cpu_std", "decision_ms_mean", "decision_ms_max", "balancer_cpu_pct",
+            "generator_cpu_pct",
         ]
         writer.writerow(fields)
+        cache: dict[str, float | None] = {}
         for row in rows:
             balancer = generator = None
             for name, values in (row.get("cpu") or {}).items():
@@ -573,7 +692,8 @@ def main() -> None:
                 row["run_id"], row["scenario"], row["algorithm"], row["repeat"],
                 row["rows"], row["span_s"], row["req_s"], row["p50"], row["p95"],
                 row["p99"], row["max_ms"], row["error_pct"], row.get("sla_violation_pct"),
-                row.get("jain"), ml.get("decision_ms_mean"), ml.get("decision_ms_max"),
+                row.get("jain"), cpu_imbalance(raw / row["file"], cache),
+                ml.get("decision_ms_mean"), ml.get("decision_ms_max"),
                 balancer, generator,
             ])
 
@@ -581,6 +701,7 @@ def main() -> None:
         chart_p95(rows, images / "p95_by_scenario.png")
         chart_cdfs(rows, raw, images)
         chart_burst(rows, raw, images / "burst_p95_over_time.png")
+        chart_burst_cpu(rows, raw, images / "burst_cpu_over_time.png")
         chart_failure(rows, raw, images / "failure_timeline.png")
         print(f"  charts  : {images}")
 

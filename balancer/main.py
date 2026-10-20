@@ -10,6 +10,7 @@ Phase 2 Implementation:
 
 import asyncio
 import collections
+import math
 import os
 import sys
 import time
@@ -63,8 +64,8 @@ def latency_window(now: float) -> Dict[str, Any]:
                 "p50": None, "p95": None, "p99": None}
 
     def at(q: float) -> float:
-        # Nearest-rank: index of the first value at or above the quantile.
-        index = max(0, min(len(values) - 1, int(round(q * len(values))) - 1))
+        # Nearest-rank: ceil(q * n) is the 1-based rank of the quantile.
+        index = max(0, min(len(values) - 1, math.ceil(q * len(values)) - 1))
         return round(values[index], 1)
 
     return {
