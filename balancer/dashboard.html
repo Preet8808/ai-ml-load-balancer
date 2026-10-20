@@ -7,6 +7,10 @@
   font or chart library would be the first thing to fail in front of an
   audience. The algorithm switcher posts to /admin/algorithm, so the effect of
   a routing policy on the same traffic can be shown live.
+
+  Presentation only: every value comes from /stats, and the JS below is the
+  same data path as before the redesign. No continuous animation is used, so
+  an open dashboard does not compete with a measurement run for CPU.
 -->
 <html lang="en">
 <head>
@@ -15,132 +19,510 @@
 <title>AI/ML Load Balancer</title>
 <style>
   :root {
-    --bg: #0f1218;
-    --panel: #171b24;
-    --panel-2: #1e2430;
-    --line: #2a3140;
-    --text: #e6ebf2;
-    --muted: #8b97a8;
-    --accent: #4da3ff;
-    --good: #3ecf8e;
-    --warn: #ffb020;
-    --bad: #ff5d5d;
+    --bg: #060910;
+    --panel: #0f1626;
+    --panel-2: #131c2e;
+    --line: rgba(148, 163, 184, .14);
+    --line-strong: rgba(148, 163, 184, .26);
+    --text: #e9eefb;
+    --muted: #8d99b0;
+    --faint: #5f6b83;
+    --accent: #6ea8fe;
+    --accent-2: #a78bfa;
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad: #fb7185;
+    --mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    --radius: 16px;
+    --shadow: 0 24px 60px -36px rgba(0, 0, 0, .9);
   }
   * { box-sizing: border-box; }
+  html { color-scheme: dark; }
   body {
-    margin: 0; padding: 20px;
-    background: var(--bg); color: var(--text);
-    font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+    margin: 0; min-height: 100vh; padding: 0 0 38px;
+    background:
+      radial-gradient(1100px 560px at 12% -12%, rgba(110, 168, 254, .16), transparent 62%),
+      radial-gradient(900px 480px at 92% -6%, rgba(167, 139, 250, .13), transparent 58%),
+      linear-gradient(180deg, #080d17 0%, #05080f 100%);
+    color: var(--text);
+    font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  h1 { font-size: 19px; margin: 0 0 2px; letter-spacing: .2px; }
-  .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
-  .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+  h1 { margin: 0; }
+  code {
+    font-family: var(--mono); font-size: .92em; color: #bcd6ff;
+    background: rgba(110, 168, 254, .1); border: 1px solid rgba(110, 168, 254, .18);
+    padding: 1px 6px; border-radius: 6px;
+  }
+  .topbar, main, footer {
+    width: 100%; max-width: 1560px; margin: 0 auto;
+    padding-left: 28px; padding-right: 28px;
+  }
+  .topbar {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 24px; flex-wrap: wrap; padding-top: 26px; padding-bottom: 20px;
+  }
+  .brand { display: flex; align-items: center; gap: 16px; min-width: 0; }
+  .logo {
+    width: 54px; height: 54px; flex: none; border-radius: 16px;
+    display: grid; place-items: center; color: #d7e6ff;
+    background: linear-gradient(145deg, rgba(110, 168, 254, .24), rgba(167, 139, 250, .12));
+    border: 1px solid rgba(110, 168, 254, .36);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), 0 14px 34px -16px rgba(110, 168, 254, .7);
+  }
+  .logo svg { width: 27px; height: 27px; }
+  .eyebrow {
+    font-size: 10px; font-weight: 650; letter-spacing: .22em;
+    text-transform: uppercase; color: #7e8cab;
+  }
+  h1 {
+    font-size: 27px; font-weight: 650; letter-spacing: -.03em; color: #eef4ff;
+    margin-top: 2px;
+  }
+  @supports (background-clip: text) or (-webkit-background-clip: text) {
+    h1 {
+      background: linear-gradient(100deg, #ffffff 8%, #bcd6ff 54%, #c4b5fd 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+  }
+  .sub { margin-top: 3px; color: var(--muted); font-size: 12.5px; }
+  .live {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 208px; padding: 9px 16px; border-radius: 999px;
+    border: 1px solid rgba(52, 211, 153, .28);
+    background: rgba(52, 211, 153, .08); color: #a7f3d0;
+    font-size: 12px; font-weight: 550; font-variant-numeric: tabular-nums;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
+  }
+  .live.bad {
+    border-color: rgba(251, 113, 133, .32); background: rgba(251, 113, 133, .08);
+    color: #fecdd3;
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--good);
+    margin-right: 8px; animation: livepulse 2.4s ease-out infinite;
+  }
+  .dot.off { background: var(--bad); animation: none; }
+  @keyframes livepulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, .45); }
+    50% { box-shadow: 0 0 0 5px rgba(52, 211, 153, 0); }
+  }
+
+  main { padding-bottom: 6px; }
   .panel {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 10px; padding: 14px 16px;
+    position: relative; overflow: hidden;
+    background: linear-gradient(180deg, rgba(20, 29, 48, .88), rgba(11, 17, 29, .9));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px 20px; box-shadow: var(--shadow);
   }
-  .tiles { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
-  .tile {
-    background: var(--panel-2); border: 1px solid var(--line);
-    border-radius: 8px; padding: 10px 14px; min-width: 108px;
+  .panel::before {
+    content: ""; position: absolute; inset: 0 0 auto; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(188, 214, 255, .32), transparent);
   }
-  .tile .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
-  .tile .v { font-size: 21px; font-weight: 600; margin-top: 2px; }
-  .server {
-    flex: 1 1 230px; background: var(--panel); border: 1px solid var(--line);
-    border-radius: 10px; padding: 13px 15px;
+  .label {
+    display: flex; align-items: center; gap: 8px;
+    color: #9aa7c2; font-size: 10.5px; font-weight: 650;
+    letter-spacing: .16em; text-transform: uppercase;
   }
-  .server.down { border-color: #5a2b2b; }
-  .shead { display: flex; justify-content: space-between; align-items: baseline; }
-  .sname { font-weight: 600; font-size: 15px; }
-  .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; }
-  .badge.ok { background: rgba(62,207,142,.15); color: var(--good); }
-  .badge.off { background: rgba(255,93,93,.15); color: var(--bad); }
-  .badge.warn { background: rgba(255,176,32,.15); color: var(--warn); }
-  table.decisions { width: 100%; border-collapse: collapse; font-size: 12px; }
-  table.decisions th {
-    text-align: left; color: var(--muted); font-weight: 500;
-    text-transform: uppercase; font-size: 10px; letter-spacing: .6px;
-    padding: 4px 8px; border-bottom: 1px solid var(--line);
+  .label::before {
+    content: ""; width: 6px; height: 6px; border-radius: 2px; flex: none;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 0 12px rgba(110, 168, 254, .55);
   }
-  table.decisions td {
-    padding: 4px 8px; border-bottom: 1px solid var(--line);
-    font-variant-numeric: tabular-nums; white-space: nowrap;
+  .hint { margin: 4px 0 0; color: var(--faint); font-size: 11.5px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; border-radius: 6px;
+    border: 1px solid var(--line); background: rgba(148, 163, 184, .06);
+    color: #9aa7c2; font-size: 10.5px; white-space: nowrap;
   }
-  table.decisions td.reason {
-    color: var(--muted); max-width: 300px; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap;
+  .section-head {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 16px; margin: 22px 0 10px;
   }
-  .chart { width: 100%; height: 130px; display: block; }
-  .chart .grid { stroke: var(--line); stroke-width: 1; }
-  .chart .p95 { fill: none; stroke: var(--accent); stroke-width: 2; }
-  .chart .p50 { fill: none; stroke: var(--muted); stroke-width: 1.5; }
-  .chart text { fill: var(--muted); font-size: 10px; }
-  .legend { color: var(--muted); font-size: 11px; margin-top: 4px; }
-  .legend b { color: var(--accent); font-weight: 600; }
-  .legend i { color: var(--muted); font-style: normal; }
-  .metrics { margin-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
-  .metrics .k { color: var(--muted); }
-  .metrics .v { text-align: right; font-variant-numeric: tabular-nums; }
-  .bar { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; margin-top: 9px; }
-  .bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
-  .bar.cpu > i.hot { background: var(--warn); }
-  .bar.cpu > i.crit { background: var(--bad); }
-  .picker { display: flex; flex-wrap: wrap; gap: 7px; }
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 16px; flex-wrap: wrap;
+  }
+
+  .control {
+    margin-top: 4px; display: flex; justify-content: space-between;
+    align-items: center; gap: 20px; flex-wrap: wrap; padding: 16px 20px;
+  }
+  .picker { display: flex; flex-wrap: wrap; gap: 8px; }
   button {
-    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 7px; padding: 7px 13px; cursor: pointer; font: inherit;
+    background: rgba(148, 163, 184, .06); color: #c7d2e8;
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 8px 14px; cursor: pointer; font: inherit; font-size: 12.5px;
+    font-weight: 550; letter-spacing: .01em;
+    transition: border-color .18s, color .18s, background .18s, transform .18s;
   }
-  button:hover { border-color: var(--accent); }
-  button.on { background: var(--accent); border-color: var(--accent); color: #08121f; font-weight: 600; }
-  .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 9px; }
-  .mlrow { display: flex; gap: 22px; flex-wrap: wrap; }
-  .mlrow div span { color: var(--muted); }
-  #status { color: var(--muted); font-size: 12px; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; }
-  .dot.off { background: var(--bad); }
+  button:hover {
+    border-color: rgba(110, 168, 254, .55); color: #fff;
+    background: rgba(110, 168, 254, .08); transform: translateY(-1px);
+  }
+  button.on {
+    background: linear-gradient(135deg, rgba(110, 168, 254, .96), rgba(139, 124, 246, .96));
+    border-color: transparent; color: #08111f; font-weight: 700;
+    box-shadow: 0 12px 26px -12px rgba(110, 168, 254, .8), inset 0 1px 0 rgba(255, 255, 255, .35);
+  }
+
+  .tiles {
+    display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 12px;
+  }
+  .tile {
+    position: relative; overflow: hidden; min-height: 94px;
+    padding: 14px 15px 13px; border-radius: 14px;
+    background: linear-gradient(180deg, rgba(20, 29, 48, .9), rgba(11, 17, 29, .94));
+    border: 1px solid var(--line);
+    transition: border-color .18s, transform .18s;
+  }
+  .tile:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+  .tile::after {
+    content: ""; position: absolute; inset: 0 0 auto; height: 2px;
+    background: linear-gradient(90deg, rgba(110, 168, 254, .9), rgba(167, 139, 250, .25), transparent);
+    opacity: .75;
+  }
+  .tile .k {
+    color: var(--muted); font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .12em; padding-right: 30px;
+  }
+  .tile .v {
+    margin-top: 7px; font-size: 24px; font-weight: 650; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; line-height: 1.15;
+  }
+  .tile .ico {
+    position: absolute; right: 13px; top: 13px;
+    width: 27px; height: 27px; border-radius: 9px; display: grid; place-items: center;
+    color: #9cc2ff; background: rgba(110, 168, 254, .09);
+    border: 1px solid rgba(110, 168, 254, .17);
+  }
+  .tile .ico svg { width: 14px; height: 14px; }
+
+  .row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  .server {
+    --sacc: #6ea8fe;
+    position: relative; overflow: hidden; padding: 16px 17px;
+    border-radius: 16px; border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(19, 28, 45, .92), rgba(10, 16, 27, .95));
+    transition: border-color .18s, transform .18s;
+  }
+  .server:hover { transform: translateY(-2px); border-color: var(--line-strong); }
+  .server::before {
+    content: ""; position: absolute; inset: 0 0 auto; height: 3px;
+    background: linear-gradient(90deg, var(--sacc), transparent 85%); opacity: .9;
+  }
+  .server.c1 { --sacc: #60a5fa; }
+  .server.c2 { --sacc: #34d399; }
+  .server.c3 { --sacc: #fbbf24; }
+  .server.c4 { --sacc: #a78bfa; }
+  .server.down { border-color: rgba(251, 113, 133, .38); }
+  .server.down::before { background: linear-gradient(90deg, var(--bad), transparent 85%); }
+  .shead {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 10px; margin-bottom: 10px;
+  }
+  .sname {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 15.5px; font-weight: 650; letter-spacing: -.01em;
+  }
+  .sicon {
+    width: 29px; height: 29px; flex: none; border-radius: 9px;
+    display: grid; place-items: center;
+    color: var(--sacc); background: rgba(255, 255, 255, .045);
+    border: 1px solid rgba(255, 255, 255, .09);
+    font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+    font-variant-numeric: tabular-nums;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 9px; border-radius: 999px;
+    font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .08em;
+    white-space: nowrap;
+  }
+  .badge::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; box-shadow: 0 0 8px currentColor;
+  }
+  .badge.ok {
+    color: #6ee7b7; background: rgba(52, 211, 153, .1);
+    border: 1px solid rgba(52, 211, 153, .2);
+  }
+  .badge.warn {
+    color: #fcd34d; background: rgba(251, 191, 36, .1);
+    border: 1px solid rgba(251, 191, 36, .2);
+  }
+  .badge.off {
+    color: #fda4af; background: rgba(251, 113, 133, .1);
+    border: 1px solid rgba(251, 113, 133, .22);
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .metrics {
+    display: grid; grid-template-columns: 1fr auto; gap: 6px 12px;
+    font-size: 12.5px;
+  }
+  .metrics .k { color: var(--muted); }
+  .metrics .v {
+    text-align: right; font-weight: 550; color: #dbe5f6;
+    font-variant-numeric: tabular-nums;
+  }
+  .gauges { display: grid; gap: 9px; margin-top: 13px; }
+  .gauge {
+    display: grid; grid-template-columns: 32px 1fr auto; gap: 8px;
+    align-items: center; color: var(--faint);
+    font-size: 9.5px; font-weight: 650; letter-spacing: .1em;
+  }
+  .gauge b {
+    color: #c9d6ee; font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0; font-variant-numeric: tabular-nums;
+  }
+  .bar {
+    height: 6px; border-radius: 999px; overflow: hidden;
+    background: rgba(148, 163, 184, .11);
+  }
+  .bar > i {
+    display: block; height: 100%; border-radius: inherit;
+    background: linear-gradient(90deg, var(--sacc), #c4b5fd);
+    transition: width .35s ease;
+  }
+  .bar.cpu > i.hot { background: linear-gradient(90deg, #fbbf24, #fb7185); }
+  .bar.cpu > i.crit { background: linear-gradient(90deg, #fb7185, #ef4444); }
+  .bar.mem > i { background: linear-gradient(90deg, #38bdf8, #818cf8); }
+
+  .duo { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 22px; }
+  .duo > .panel { flex: 1 1 360px; }
+  .chart-panel { flex: 1.7 1 540px; }
+  .chart {
+    width: 100%; height: 152px; display: block; margin-top: 10px;
+    overflow: visible;
+  }
+  .chart .grid {
+    stroke: rgba(148, 163, 184, .15); stroke-width: 1; stroke-dasharray: 3 4;
+  }
+  .chart .p95 {
+    fill: none; stroke: #7db4ff; stroke-width: 2.4;
+    stroke-linejoin: round; stroke-linecap: round;
+  }
+  .chart .p50 {
+    fill: none; stroke: rgba(196, 181, 253, .75);
+    stroke-width: 1.6; stroke-dasharray: 4 4;
+  }
+  .chart text {
+    fill: #7f8cab; font-size: 10px; font-family: var(--mono);
+  }
+  .legend {
+    margin-top: 8px; color: var(--muted); font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .legend b { color: #9cc2ff; font-weight: 650; }
+  .legend i { color: #c4b5fd; font-style: normal; }
+  .legend b::before, .legend i::before {
+    content: ""; display: inline-block; width: 16px; height: 2px;
+    border-radius: 2px; vertical-align: middle; margin-right: 6px;
+  }
+  .legend b::before { background: #7db4ff; box-shadow: 0 0 8px rgba(110, 168, 254, .7); }
+  .legend i::before {
+    background: repeating-linear-gradient(90deg, #c4b5fd 0 4px, transparent 4px 7px);
+  }
+
+  .mlrow {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px; margin-top: 14px;
+  }
+  .mlrow > div {
+    padding: 9px 11px; border-radius: 10px;
+    background: rgba(148, 163, 184, .05);
+    border: 1px solid var(--line);
+    color: #c7d2e8; font-size: 12px;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mlrow > div span {
+    display: block; margin-bottom: 3px;
+    color: var(--faint); font-size: 9.5px; font-weight: 650;
+    text-transform: uppercase; letter-spacing: .1em;
+  }
+  .mlrow > div.wide { grid-column: 1 / -1; }
+  .mlrow b { font-weight: 650; }
+
+  .decisions-panel { margin-top: 22px; }
+  .table-wrap { overflow-x: auto; margin-top: 8px; }
+  table.decisions {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    font-size: 12px;
+  }
+  table.decisions th {
+    text-align: left; padding: 0 10px 9px;
+    color: #7f8cab; font-size: 9.5px; font-weight: 650;
+    text-transform: uppercase; letter-spacing: .12em;
+    border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  table.decisions th.num { text-align: right; }
+  table.decisions td {
+    padding: 7px 10px; white-space: nowrap;
+    color: #c7d2e8; font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid rgba(148, 163, 184, .07);
+  }
+  table.decisions td.num { text-align: right; font-family: var(--mono); font-size: 11.5px; }
+  table.decisions tr:last-child td { border-bottom: 0; }
+  table.decisions tr:hover td { background: rgba(110, 168, 254, .045); }
+  table.decisions td.reason {
+    max-width: 340px; overflow: hidden; text-overflow: ellipsis;
+    color: var(--muted); font-family: var(--mono); font-size: 11px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; padding: 2px 8px;
+    border-radius: 999px; font-size: 10px; font-weight: 650;
+    letter-spacing: .03em;
+  }
+  .pill.ok {
+    color: #6ee7b7; background: rgba(52, 211, 153, .1);
+    border: 1px solid rgba(52, 211, 153, .2);
+  }
+  .pill.bad {
+    color: #fda4af; background: rgba(251, 113, 133, .1);
+    border: 1px solid rgba(251, 113, 133, .24);
+  }
+  .pill.model {
+    color: #9cc2ff; background: rgba(110, 168, 254, .11);
+    border: 1px solid rgba(110, 168, 254, .22);
+  }
+  .pill.heur {
+    color: #a3aec4; background: rgba(148, 163, 184, .07);
+    border: 1px solid var(--line);
+  }
+
+  footer {
+    margin-top: 30px; padding-top: 16px;
+    border-top: 1px solid var(--line);
+    color: var(--faint); font-size: 11.5px;
+  }
+
+  @media (max-width: 1260px) {
+    .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 720px) {
+    .topbar, main, footer { padding-left: 16px; padding-right: 16px; }
+    h1 { font-size: 23px; }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .row { grid-template-columns: 1fr; }
+    .live { width: 100%; }
+    .control { align-items: flex-start; }
+  }
 </style>
 </head>
 <body>
 
-<h1>AI/ML Load Balancer</h1>
-<div class="sub">
-  Live routing state from <code>/stats</code>, refreshed every second.
-  <span id="status"><span class="dot"></span>connecting…</span>
-</div>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2 4.5 13.5H11l-1 8.5L19.5 10H13V2Z"/>
+      </svg>
+    </div>
+    <div class="brandtext">
+      <div class="eyebrow">Predictive traffic control</div>
+      <h1>AI/ML Load Balancer</h1>
+      <div class="sub">Four heterogeneous backends · live routing state from <code>/stats</code></div>
+    </div>
+  </div>
+  <div class="live" id="status" aria-live="polite"><span class="dot"></span>connecting…</div>
+</header>
 
-<div class="panel" style="margin-bottom:14px">
-  <div class="label">Routing algorithm <span style="text-transform:none;letter-spacing:0">— switch it and watch the same traffic re-route</span></div>
-  <div class="picker" id="picker"></div>
-</div>
+<main>
+  <section class="panel control">
+    <div>
+      <div class="label">Routing algorithm</div>
+      <p class="hint">Switch it and watch the same traffic re-route — no restart, no dropped requests.</p>
+    </div>
+    <div class="picker" id="picker"></div>
+  </section>
 
-<div class="tiles" id="tiles"></div>
+  <div class="section-head">
+    <div>
+      <div class="label">Fleet overview</div>
+      <p class="hint">Live aggregates across the four backends.</p>
+    </div>
+  </div>
+  <section class="tiles" id="tiles"></section>
 
-<div class="panel" id="mlpanel" style="margin-bottom:14px; display:none">
-  <div class="label">Model serving</div>
-  <div class="mlrow" id="mlrow"></div>
-</div>
+  <div class="section-head">
+    <div>
+      <div class="label">Backends</div>
+      <p class="hint">CPU is percent of each container's quota — the 4:2:2:1 split is the heterogeneity the router prices.</p>
+    </div>
+  </div>
+  <section class="row" id="servers"></section>
 
-<div class="panel" style="margin-bottom:14px">
-  <div class="label">Latency <span style="text-transform:none;letter-spacing:0">— p95 and p50 of the last 60 s of successful requests, plotted as the dashboard polls</span></div>
-  <svg class="chart" id="chart" viewBox="0 0 600 130" preserveAspectRatio="none"></svg>
-  <div class="legend" id="legend">waiting for traffic…</div>
-</div>
+  <div class="duo">
+    <section class="panel chart-panel">
+      <div class="panel-head">
+        <div>
+          <div class="label">Latency</div>
+          <p class="hint">p95 and p50 of the last 60 s of successful requests, plotted as the dashboard polls.</p>
+        </div>
+      </div>
+      <svg class="chart" id="chart" viewBox="0 0 600 130" preserveAspectRatio="none"
+           role="img" aria-label="p95 and p50 latency over time"></svg>
+      <div class="legend" id="legend">waiting for traffic…</div>
+    </section>
 
-<div class="row" id="servers"></div>
+    <section class="panel" id="mlpanel" style="display:none">
+      <div class="panel-head">
+        <div>
+          <div class="label">Model serving</div>
+          <p class="hint">Artifact, live error and drift state.</p>
+        </div>
+      </div>
+      <div class="mlrow" id="mlrow"></div>
+    </section>
+  </div>
 
-<div class="panel" style="margin-top:14px">
-  <div class="label">Recent decisions <span style="text-transform:none;letter-spacing:0">— the prediction against what the client actually waited</span></div>
-  <table class="decisions" id="decisions"></table>
-</div>
+  <section class="panel decisions-panel">
+    <div class="panel-head">
+      <div>
+        <div class="label">Recent decisions</div>
+        <p class="hint">The prediction against what the client actually waited — the last 15 requests.</p>
+      </div>
+      <span class="chip">model ↔ outcome</span>
+    </div>
+    <div class="table-wrap"><table class="decisions" id="decisions"></table></div>
+  </section>
+</main>
+
+<footer>
+  Served by the balancer itself · <code>/stats</code> polled every second ·
+  decisions joined to requests on <code>(run_id, timestamp)</code>
+</footer>
 
 <script>
 const POLL_MS = 1000;
 let algorithm = null;
 
+// Small stroke icons for the KPI cards. Keyed by the tile label so the data
+// function stays untouched.
+const TILE_ICONS = {
+  "healthy": '<path d="M3 12h4l2.5-7 4.5 14 2.5-7h4"/>',
+  "in flight": '<path d="M4 18h16M4 12h16M4 6h10"/>',
+  "req/s (5 s)": '<path d="M4 19V5m0 14h16"/><path d="m7 15 3.5-4 3 2.5L19 7"/>',
+  "mean cpu": '<rect x="7" y="7" width="10" height="10" rx="2"/>' +
+              '<path d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/>',
+  "mean errors": '<path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5m0 3.5v.5"/>',
+  "feed age": '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  "retries": '<path d="M20 11a8 8 0 1 0-2.4 6.8"/><path d="M20 5v6h-6"/>',
+  "stale routing": '<path d="M12 3 3 6v5c0 5 3.8 8.4 9 10 5.2-1.6 9-5 9-10V6l-9-3Z"/>' +
+                   '<path d="m9 12 2 2 4-4"/>'
+};
+
 function tile(key, value, colour) {
-  return `<div class="tile"><div class="k">${key}</div>
-          <div class="v" ${colour ? `style="color:${colour}"` : ""}>${value}</div></div>`;
+  const icon = TILE_ICONS[key] || "";
+  return `<div class="tile">
+    <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></div>
+    <div class="k">${key}</div>
+    <div class="v" ${colour ? `style="color:${colour}"` : ""}>${value}</div>
+  </div>`;
 }
 
 function renderTiles(s) {
@@ -152,52 +534,65 @@ function renderTiles(s) {
   const errs = servers.reduce((a, x) => a + ((x.metrics && x.metrics.error_rate_5s) || 0), 0) / servers.length;
 
   document.getElementById("tiles").innerHTML =
-    tile("healthy", `${healthy} / ${servers.length}`, healthy === servers.length ? null : "#ffb020") +
+    tile("healthy", `${healthy} / ${servers.length}`, healthy === servers.length ? null : "#fbbf24") +
     tile("in flight", inflight) +
     tile("req/s (5 s)", rate.toFixed(0)) +
     tile("mean cpu", cpu.toFixed(1) + "%") +
-    tile("mean errors", (errs * 100).toFixed(2) + "%", errs > 0.05 ? "#ff5d5d" : null) +
+    tile("mean errors", (errs * 100).toFixed(2) + "%", errs > 0.05 ? "#fb7185" : null) +
     // The feed age is the staleness guard made visible: above 3 s the router
     // serves from the last snapshot with least-connections instead of failing.
     tile("feed age",
          s.feed && s.feed.age_ms != null ? (s.feed.age_ms / 1000).toFixed(1) + " s" : "—",
-         s.feed && s.feed.stale ? "#ff5d5d" : null) +
+         s.feed && s.feed.stale ? "#fb7185" : null) +
     tile("retries", (s.resilience && s.resilience.retries) || 0) +
     tile("stale routing", (s.resilience && s.resilience.stale_routing) || 0,
-         s.resilience && s.resilience.stale_routing ? "#ffb020" : null);
+         s.resilience && s.resilience.stale_routing ? "#fbbf24" : null);
 }
 
 function renderServers(s) {
-  const html = s.servers.map(x => {
+  const html = s.servers.map((x, i) => {
     const m = x.metrics || {};
     const cpu = m.cpu_pct || 0;
+    const mem = m.mem_pct || 0;
     // cpu_pct is already relative to the server's own quota, so the quota is
     // shown next to it: "23% of 0.80" is the honest form of "23% busy".
     const quota = m.cpu_limit || x.cpu_limit || 0;
+    const memLimit = x.mem_limit_mb || m.mem_limit_mb || 0;
     const cls = cpu > 85 ? "crit" : cpu > 65 ? "hot" : "";
     const sent = x.sent_since_snapshot || 0;
+    const ok = x.healthy && !x.circuit_open;
     // Circuit state is per-request evidence, not the collector's slower health
     // verdict: it opens in milliseconds when a backend stops answering.
     const state = x.circuit_open ? "circuit open" : x.slow_start ? "slow start"
                   : x.healthy ? "healthy" : "down";
     const stateCls = x.circuit_open || !x.healthy ? "off" : x.slow_start ? "warn" : "ok";
-    return `<div class="server ${x.healthy && !x.circuit_open ? "" : "down"}">
+    return `<article class="server c${(i % 4) + 1} ${ok ? "" : "down"}">
       <div class="shead">
-        <span class="sname">${x.server_id}</span>
+        <div class="sname"><span class="sicon">0${i + 1}</span>${x.server_id}</div>
         <span class="badge ${stateCls}">${state}</span>
       </div>
+      <div class="chips">
+        <span class="chip">${quota.toFixed(2)} CPU quota</span>
+        ${memLimit ? `<span class="chip">${memLimit} MB limit</span>` : ""}
+        ${x.slow_start ? `<span class="chip">warming up</span>` : ""}
+      </div>
       <div class="metrics">
-        <span class="k">cpu / limit</span><span class="v">${cpu.toFixed(1)}% of ${quota.toFixed(2)}</span>
-        <span class="k">memory</span><span class="v">${(m.mem_pct || 0).toFixed(1)}%</span>
         <span class="k">in flight</span><span class="v">${x.inflight_local || 0}</span>
-        <span class="k">routed this second</span><span class="v">${sent}</span>
+        <span class="k">routed / poll</span><span class="v">${sent}</span>
         <span class="k">request rate</span><span class="v">${(m.req_rate_5s || 0).toFixed(1)}/s</span>
         <span class="k">rt ewma</span><span class="v">${(m.rt_ewma_ms || 0).toFixed(0)} ms</span>
         <span class="k">rt p95 (5 s)</span><span class="v">${(m.rt_p95_5s_ms || 0).toFixed(0)} ms</span>
         <span class="k">errors</span><span class="v">${((m.error_rate_5s || 0) * 100).toFixed(2)}%</span>
       </div>
-      <div class="bar cpu"><i class="${cls}" style="width:${Math.min(cpu, 100)}%"></i></div>
-    </div>`;
+      <div class="gauges">
+        <div class="gauge"><span>CPU</span>
+          <div class="bar cpu"><i class="${cls}" style="width:${Math.min(cpu, 100)}%"></i></div>
+          <b>${cpu.toFixed(1)}%</b></div>
+        <div class="gauge"><span>MEM</span>
+          <div class="bar mem"><i style="width:${Math.min(mem, 100)}%"></i></div>
+          <b>${mem.toFixed(1)}%</b></div>
+      </div>
+    </article>`;
   }).join("");
   document.getElementById("servers").innerHTML = html;
 }
@@ -207,28 +602,30 @@ function renderMl(s) {
   const ml = s.ml;
   if (!ml) { panel.style.display = "none"; return; }
   panel.style.display = "block";
+  const guard = ml.drift;
   const serving = ml.loaded && ml.fallbacks === 0;
+  const statusText = serving ? "Predictions drive routing"
+                   : ml.loaded ? "Predicting with fallbacks" : "Heuristic fallback";
+  const statusColour = serving ? "#34d399" : ml.loaded ? "#fbbf24" : "#fb7185";
   document.getElementById("mlrow").innerHTML = `
-    <div><span>artifact</span> ${ml.artifact || "—"}</div>
-    <div><span>estimator</span> ${ml.estimator || "—"}</div>
-    <div><span>decisions</span> ${ml.decisions}</div>
-    <div><span>decision cost</span> ${ml.decision_ms_mean != null ? ml.decision_ms_mean.toFixed(2) + " ms avg" : "—"}</div>
-    <div><span>fallbacks</span>
-      <b style="color:${ml.fallbacks ? "#ffb020" : "inherit"}">${ml.fallbacks}</b>
+    <div><span>Status</span><b style="color:${statusColour}">${statusText}</b></div>
+    <div><span>Artifact</span>${ml.artifact || "—"}</div>
+    <div><span>Estimator</span>${ml.estimator || "—"}</div>
+    <div><span>Decisions</span>${ml.decisions}</div>
+    <div><span>Decision cost</span>${ml.decision_ms_mean != null ? ml.decision_ms_mean.toFixed(2) + " ms avg" : "—"}</div>
+    <div><span>Fallbacks</span>
+      <b style="color:${ml.fallbacks ? "#fbbf24" : "inherit"}">${ml.fallbacks}</b>
       ${ml.load_error ? `(${ml.load_error})` : ""}</div>
-    <div><span>trained on</span> ${ml.trained_on || "—"} (${ml.train_rows ? ml.train_rows.toLocaleString() + " rows" : "—"})</div>
-    <div><span>status</span>
-      <b style="color:${serving ? "#3ecf8e" : ml.loaded ? "#ffb020" : "#ff5d5d"}">
-        ${serving ? "predictions drive routing" : ml.loaded ? "predicting with fallbacks" : "heuristic fallback"}</b></div>
-    ${ml.drift ? `<div><span>drift guard</span>
-      live MAE ${ml.drift.live_mae_log != null ? ml.drift.live_mae_log.toFixed(3) : "—"}
-      vs threshold ${ml.drift.threshold}
-      ${ml.drift.demoted ? `<b style="color:#ff5d5d"> — DEMOTED, routing on least-connections</b>` : ""}</div>
-    <div><span>&nbsp;</span>
-      window ${ml.drift.samples_in_window}/${ml.drift.window}
-      · demotions ${ml.drift.demotions}
-      · promotions ${ml.drift.promotions}
-      · drift-routed ${ml.drift_routed}</div>` : ""}`;
+    <div><span>Trained on</span>${ml.trained_on || "—"}${ml.train_rows ? ` · ${ml.train_rows.toLocaleString()} rows` : ""}</div>
+    ${guard ? `<div class="wide"><span>Drift guard</span>
+      live MAE <b>${guard.live_mae_log != null ? guard.live_mae_log.toFixed(3) : "—"}</b>
+      · threshold ${guard.threshold}
+      · window ${guard.samples_in_window}/${guard.window}
+      · demotions ${guard.demotions}
+      · promotions ${guard.promotions}
+      · drift-routed ${ml.drift_routed}
+      ${guard.demoted ? `<b style="color:#fb7185"> · DEMOTED, routing on least-connections</b>` : ""}
+    </div>` : ""}`;
 }
 
 // p95 history. The server reports a 60 s window on every poll; this keeps the
@@ -254,21 +651,43 @@ function renderLatency(s) {
     if (LATENCY_HISTORY.length > HISTORY_POINTS) LATENCY_HISTORY.shift();
   }
 
-  const W = 600, H = 130, PAD = 10;
-  const max = Math.max(50, ...LATENCY_HISTORY.map(p => p.p95)) * 1.1;
-  const x = i => PAD + (i / Math.max(1, LATENCY_HISTORY.length - 1)) * (W - 2 * PAD);
-  const y = v => H - PAD - Math.min(v / max, 1) * (H - 2 * PAD);
+  const W = 600, H = 130, PAD = 10, TOP = 24, BOTTOM = 18;
+  const plotW = W - 2 * PAD;
+  const plotH = H - TOP - BOTTOM;
+  // Round the scale to 1/2/5 x 10^n so the axis label is a readable number
+  // rather than an arbitrary maximum like "297 ms".
+  const rawMax = Math.max(50, ...LATENCY_HISTORY.map(p => p.p95)) * 1.08;
+  const magnitude = 10 ** Math.floor(Math.log10(rawMax));
+  const norm = rawMax / magnitude;
+  const axisMax = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * magnitude;
+  const x = i => PAD + (i / Math.max(1, LATENCY_HISTORY.length - 1)) * plotW;
+  const y = v => H - BOTTOM - Math.min(v / axisMax, 1) * plotH;
   const line = key => LATENCY_HISTORY
     .map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`)
     .join(" ");
+  const p95 = LATENCY_HISTORY.map((p, i) => `${x(i).toFixed(1)},${y(p.p95).toFixed(1)}`);
+  const area = p95.length
+    ? `M${x(0).toFixed(1)},${y(0)} L${p95.join(" L")} L${x(p95.length - 1).toFixed(1)},${y(0)} Z`
+    : "";
+  const lastPoint = LATENCY_HISTORY[LATENCY_HISTORY.length - 1];
 
   svg.innerHTML = `
-    <line class="grid" x1="${PAD}" y1="${y(max)}" x2="${W - PAD}" y2="${y(max)}"></line>
+    <defs>
+      <linearGradient id="p95fade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#6ea8fe" stop-opacity=".32"/>
+        <stop offset="100%" stop-color="#6ea8fe" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <line class="grid" x1="${PAD}" y1="${y(axisMax)}" x2="${W - PAD}" y2="${y(axisMax)}"></line>
     <line class="grid" x1="${PAD}" y1="${y(0)}" x2="${W - PAD}" y2="${y(0)}"></line>
+    <path fill="url(#p95fade)" d="${area}"></path>
     <path class="p50" d="${line("p50")}"></path>
     <path class="p95" d="${line("p95")}"></path>
-    <text x="${PAD}" y="${PAD + 4}">${max.toFixed(0)} ms</text>
-    <text x="${W - PAD}" y="${H - 1}" text-anchor="end">now</text>`;
+    <circle cx="${x(LATENCY_HISTORY.length - 1).toFixed(1)}"
+            cy="${y(lastPoint.p95).toFixed(1)}" r="3.2"
+            fill="#bcd6ff" stroke="#0b1220" stroke-width="2"></circle>
+    <text x="${PAD}" y="${TOP - 8}">${axisMax.toFixed(0)} ms</text>
+    <text x="${W - PAD}" y="${H - 4}" text-anchor="end">now</text>`;
   legend.innerHTML =
     `p95 <b>${lat.p95.toFixed(0)} ms</b> · p50 <i>${lat.p50.toFixed(0)} ms</i>` +
     ` · ${lat.samples.toLocaleString()} requests in the window` +
@@ -279,11 +698,13 @@ function renderDecisions(s) {
   const table = document.getElementById("decisions");
   const rows = (s.decisions && s.decisions.recent) || [];
   if (!rows.length) {
-    table.innerHTML = `<tr><td class="reason">no decisions yet — send some traffic</td></tr>`;
+    table.innerHTML = `<tr><td class="reason" colspan="8"
+      style="text-align:center;padding:22px">no decisions yet — send some traffic</td></tr>`;
     return;
   }
-  const head = `<tr><th>time</th><th>server</th><th>predicted</th><th>actual</th>
-      <th>error</th><th>status</th><th>model</th><th>reason</th></tr>`;
+  const head = `<tr><th>time</th><th>server</th><th class="num">predicted</th>
+      <th class="num">actual</th><th class="num">error</th><th>status</th>
+      <th>model</th><th>reason</th></tr>`;
   table.innerHTML = head + rows.slice().reverse().map(r => {
     // The log-space error is the metric the guard scores, so showing it next
     // to the raw pair keeps the dashboard and the guard consistent.
@@ -295,11 +716,11 @@ function renderDecisions(s) {
     return `<tr>
       <td>${time}</td>
       <td>${r.server_id}</td>
-      <td>${r.predicted_ms != null ? r.predicted_ms.toFixed(1) + " ms" : "—"}</td>
-      <td>${r.actual_ms.toFixed(1)} ms</td>
-      <td>${error}</td>
-      <td style="color:${r.status >= 400 ? "#ff5d5d" : "inherit"}">${r.status}</td>
-      <td>${r.model_driven ? "yes" : "no"}</td>
+      <td class="num">${r.predicted_ms != null ? r.predicted_ms.toFixed(1) + " ms" : "—"}</td>
+      <td class="num">${r.actual_ms.toFixed(1)} ms</td>
+      <td class="num">${error}</td>
+      <td><span class="pill ${r.status >= 400 ? "bad" : "ok"}">${r.status}</span></td>
+      <td><span class="pill ${r.model_driven ? "model" : "heur"}">${r.model_driven ? "model" : "heur"}</span></td>
       <td class="reason" title="${r.reason}">${r.reason}</td>
     </tr>`;
   }).join("");
@@ -320,6 +741,7 @@ function renderPicker(names) {
 }
 
 async function tick() {
+  const statusEl = document.getElementById("status");
   try {
     const r = await fetch("/stats", { cache: "no-store" });
     const s = await r.json();
@@ -336,11 +758,11 @@ async function tick() {
     renderMl(s);
     renderLatency(s);
     renderDecisions(s);
-    document.getElementById("status").innerHTML =
-      `<span class="dot"></span>live — ${new Date().toLocaleTimeString()}`;
+    statusEl.classList.remove("bad");
+    statusEl.innerHTML = `<span class="dot"></span>live · ${new Date().toLocaleTimeString()}`;
   } catch (e) {
-    document.getElementById("status").innerHTML =
-      `<span class="dot off"></span>balancer not reachable (${e.message})`;
+    statusEl.classList.add("bad");
+    statusEl.innerHTML = `<span class="dot off"></span>balancer not reachable (${e.message})`;
   }
 }
 
