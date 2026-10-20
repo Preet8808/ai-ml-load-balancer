@@ -163,6 +163,35 @@ price, and its queue spikes. It was reverted, and the numbers are kept here
 because a rejected variant with a measurement is more useful than a missing
 one.
 
+## Under a fault
+
+The `degraded` profile adds 400 ms to every request on backend3 and fails 35%
+of them, for the whole run. Throughput necessarily falls; the question is
+where the delay and the errors land.
+
+| policy | req/s | p50 | p95 | p99 | errors | share to the faulted backend |
+|---|---:|---:|---:|---:|---:|---:|
+| ml | 160 | 54 ms | 162 ms | 279 ms | 0.26% | 0-1% |
+| round_robin | 136 | 10 ms | 414 ms | 526 ms | 8.73% | 25% |
+
+Two paired repeats, 30 users. round_robin cannot avoid the faulted backend - it
+gives it a quarter of the traffic no matter what - so a quarter of its requests
+pay 400 ms or a 503, and 8.73% of all requests fail. The router sends it 0-1%:
+the fault is visible in the snapshot the model scores (`err_rate_5s` rises,
+`rt_ewma_ms` and `rt_p95_5s_ms` jump), and the 400 ms sleep keeps that
+backend's live queue longer, so both terms of the score point away from it.
+Errors drop 34x, throughput rises 18%, p95 improves 2.6x.
+
+The one metric round_robin wins is p50 (10 ms against 54 ms). Its successful
+requests are mostly the three-quarters that never touched the faulted backend,
+while the router's successes are served by backends 1 and 2 carrying the full
+160 req/s. A median that excludes failures is not the comparison that matters
+here; the error column is.
+
+This is the scenario the router is for: a static distribution keeps feeding a
+broken server forever, and a per-request prediction that reads the server's own
+error and latency signal does not.
+
 ## What this does and does not show
 
 - It is a four-server cluster on one laptop, with two physical cores shared by

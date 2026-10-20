@@ -147,6 +147,15 @@ The learned router beats the plan's round-robin baseline by about 9x on p95 and
 every repeat. `docs/serving.md` explains why, and documents the herding bug the
 first serving version had and the queue correction that fixed it.
 
+Under the `degraded` profile - one backend 400 ms slower and failing 35% of
+requests - ml routes 0-1% of traffic to the faulted backend against
+round_robin's fixed 25%, which shows up where it matters:
+
+| policy | req/s | p95 | p99 | errors |
+|---|---:|---:|---:|---:|
+| ml | 160 | 162 ms | 279 ms | **0.26%** |
+| round_robin | 136 | 414 ms | 526 ms | **8.73%** |
+
 ## Milestones
 
 | Milestone | Week | Focus | Status |
