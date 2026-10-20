@@ -78,6 +78,14 @@ class ServerInfo:
     # Requests currently being proxied to this server. Maintained by the proxy
     # between collector polls, which report a value that is up to a second old.
     inflight_local: int = 0
+    # Resilience state, maintained per request by the proxy rather than per poll
+    # by the collector. `circuit_tripped` stays True from the moment the breaker
+    # opens until a probe succeeds, which is what starts the slow-start ramp.
+    consecutive_failures: int = 0
+    circuit_open_until: float = 0.0
+    circuit_tripped: bool = False
+    circuit_opens: int = 0
+    slow_start_until: float = 0.0
 
     @property
     def healthy(self) -> bool:

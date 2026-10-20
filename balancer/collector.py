@@ -6,6 +6,7 @@ import collections
 from typing import List, Dict, Deque
 
 from .interfaces import ServerInfo, ServerMetrics
+from .resilience import SLOW_START_S
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class MetricsCollector:
         self.failures_to_unhealthy = failures_to_unhealthy
         self.successes_to_healthy = successes_to_healthy
         self._running = False
+        self._enabled = True
         self._client = httpx.AsyncClient(timeout=poll_timeout)
         self._history: Dict[str, Deque[Dict]] = {
             s.server_id: collections.deque(maxlen=60) for s in servers
@@ -48,6 +50,25 @@ class MetricsCollector:
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
         logger.info(f"Metrics collector started for {len(self.servers)} servers")
+
+    def set_enabled(self, enabled: bool) -> None:
+        """
+        Pause or resume polling without stopping the collector task.
+
+        Used by /admin/collector so the stale-feed fallback can be exercised on
+        demand: paused long enough, every snapshot ages past STALE_AFTER_S and
+        the proxy switches to least-connections over the last known state.
+        """
+        self._enabled = enabled
+        logger.warning("Metrics collector %s", "resumed" if enabled else "PAUSED")
+
+    def status(self) -> dict:
+        return {
+            "running": self._running,
+            "enabled": self._enabled,
+            "poll_interval_s": self.poll_interval,
+            "servers": len(self.servers),
+        }
 
     async def stop(self):
         self._running = False
@@ -62,6 +83,11 @@ class MetricsCollector:
 
     async def _poll_loop(self):
         while self._running:
+            if not self._enabled:
+                # Stay responsive to set_enabled() without polling. The task
+                # keeps running so resume needs no restart.
+                await asyncio.sleep(0.2)
+                continue
             started = time.time()
             tasks = [self._poll_server(server) for server in self.servers]
             await asyncio.gather(*tasks)
@@ -111,6 +137,9 @@ class MetricsCollector:
                 server.health_check_successes += 1
                 healthy_now = server.health_check_successes >= self.successes_to_healthy
                 if healthy_now:
+                    # Ramp traffic back instead of handing a just-recovered
+                    # backend its full weight at once.
+                    server.slow_start_until = now + SLOW_START_S
                     logger.info(f"Server {server.server_id} is now HEALTHY")
             else:
                 server.health_check_successes = 0

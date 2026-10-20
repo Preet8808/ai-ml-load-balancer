@@ -25,6 +25,7 @@ from balancer.algorithms import get_algorithm, algorithm_names, Algorithm
 from balancer.interfaces import RequestContext, ServerChoice, ServerInfo, RequestType
 from balancer.collector import MetricsCollector
 from balancer.logger import RequestLogger
+from balancer import resilience
 
 CONFIG_PATH = os.environ.get("BALANCER_CONFIG", "balancer/config.yaml")
 DASHBOARD_PATH = Path(__file__).with_name("dashboard.html")
@@ -35,6 +36,11 @@ client: Optional[httpx.AsyncClient] = None
 algorithm_instance: Optional[Algorithm] = None
 collector: Optional[MetricsCollector] = None
 req_logger: Optional[RequestLogger] = None
+
+# Resilience counters, surfaced through /stats. They count routing decisions and
+# retries rather than requests: a stale-feed decision can also happen on the
+# single retry of a failed attempt.
+STATS = {"retries": 0, "stale_routing": 0}
 
 
 def load_config():
@@ -140,6 +146,21 @@ async def set_algorithm(name: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/admin/collector")
+async def set_collector(enabled: bool = True):
+    """
+    Pause or resume metrics polling.
+
+    Pausing is how the stale-feed fallback is demonstrated: once the newest
+    snapshot is older than STALE_AFTER_S, routing switches to least-connections
+    over the last known state instead of failing every request.
+    """
+    if collector is None:
+        raise HTTPException(status_code=503, detail="Collector not initialised")
+    collector.set_enabled(enabled)
+    return {"status": "ok", "collector": collector.status()}
+
+
 @app.post("/admin/run")
 async def start_run(run_id: str):
     """
@@ -216,6 +237,7 @@ async def get_config():
 @app.get("/stats")
 async def stats():
     """Expose per-server load, predictions, and decision counts."""
+    now = time.time()
     result = []
     for s in SERVERS:
         result.append({
@@ -229,19 +251,35 @@ async def stats():
             "sent_since_snapshot": getattr(s, 'sent_since_snapshot', 0),
             "inflight_local": getattr(s, 'inflight_local', 0),
             "metrics": s.metrics.__dict__ if s.metrics else None,
-            "health_failures": getattr(s, 'health_check_failures', 0)
+            "health_failures": getattr(s, 'health_check_failures', 0),
+            "circuit_open": resilience.circuit_open(s, now),
+            "consecutive_failures": s.consecutive_failures,
+            "circuit_opens": s.circuit_opens,
+            "slow_start": s.slow_start_until > now,
         })
     # An ML router reports its own serving state, so a demo can show whether
     # predictions are driving the decisions or a fallback is.
     describe = getattr(algorithm_instance, "status", None)
     ml_status = describe() if callable(describe) else None
 
+    age = resilience.feed_age(SERVERS, now)
     return {
         "servers": result,
         "algorithm": ALGORITHM,
         "sla_ms": SLA_MS,
         "inflight_total": sum(getattr(s, 'inflight_local', 0) for s in SERVERS),
         "ml": ml_status,
+        "feed": {
+            "age_ms": round(age * 1000.0, 1) if age is not None else None,
+            "stale": resilience.feed_is_stale(SERVERS, now),
+            "collector": collector.status() if collector else None,
+        },
+        "resilience": {
+            "retries": STATS["retries"],
+            "stale_routing": STATS["stale_routing"],
+            "circuits_open": [s.server_id for s in SERVERS if resilience.circuit_open(s, now)],
+            "circuit_opens": sum(s.circuit_opens for s in SERVERS),
+        },
     }
 
 
@@ -293,15 +331,6 @@ async def proxy(request: Request, path: str):
         payload_kb=declared_kb,
     )
 
-    choice: Optional[ServerChoice] = algorithm_instance.choose_server(context, SERVERS)
-    if choice is None:
-        raise HTTPException(status_code=503, detail="No healthy servers available")
-
-    server = choice.server
-    target_url = f"http://{server.host}:{server.port}/{path}"
-    if request.url.query:
-        target_url += f"?{request.url.query}"
-
     headers = dict(request.headers)
     headers.pop("host", None)
     headers.pop("content-length", None)
@@ -316,69 +345,122 @@ async def proxy(request: Request, path: str):
         except (TypeError, ValueError):
             return default
 
-    # Save state before request for training data
-    state_before = {
-        "srv_cpu_pct": _f(server.metrics.cpu_pct if server.metrics else 0.0),
-        "srv_mem_pct": _f(server.metrics.mem_pct if server.metrics else 0.0),
-        "inflight": int(_f(server.metrics.inflight_requests if server.metrics else 0.0)),
-        "req_rate_5s": _f(server.metrics.req_rate_5s if server.metrics else 0.0),
-        "rt_ewma_ms": _f(server.metrics.rt_ewma_ms if server.metrics else 0.0),
-        "rt_p95_5s_ms": _f(server.metrics.rt_p95_5s_ms if server.metrics else 0.0),
-        "err_rate_5s": _f(server.metrics.error_rate_5s if server.metrics else 0.0),
-        "cpu_limit": _f(server.metrics.cpu_limit if server.metrics else server.cpu_limit),
-        "cpu_delta_5s": _f(server.metrics.cpu_delta_5s if server.metrics else 0.0),
-    }
+    def _state_of(server: ServerInfo) -> Dict[str, float]:
+        """The server's pre-request snapshot, exactly as the Parquet row records it."""
+        metrics = server.metrics
+        return {
+            "srv_cpu_pct": _f(metrics.cpu_pct if metrics else 0.0),
+            "srv_mem_pct": _f(metrics.mem_pct if metrics else 0.0),
+            "inflight": int(_f(metrics.inflight_requests if metrics else 0.0)),
+            "req_rate_5s": _f(metrics.req_rate_5s if metrics else 0.0),
+            "rt_ewma_ms": _f(metrics.rt_ewma_ms if metrics else 0.0),
+            "rt_p95_5s_ms": _f(metrics.rt_p95_5s_ms if metrics else 0.0),
+            "err_rate_5s": _f(metrics.error_rate_5s if metrics else 0.0),
+            "cpu_limit": _f(metrics.cpu_limit if metrics else server.cpu_limit),
+            "cpu_delta_5s": _f(metrics.cpu_delta_5s if metrics else 0.0),
+        }
 
-    # Track this request as in-flight for the duration of the proxy call. The
-    # chosen algorithm has already counted the request in sent_since_snapshot,
-    # and this block incremented it a second time, so /stats reported roughly
-    # three times the traffic the collector had just reset the counter for.
-    server.inflight_local = getattr(server, 'inflight_local', 0) + 1
+    request_started = time.time()
+    tried: List[str] = []
+    final: Optional[Dict[str, Any]] = None
 
-    start_time = time.time()
+    for attempt in (0, 1):
+        if attempt == 1:
+            STATS["retries"] += 1
 
-    async def _record(status: int, duration_ms: float):
-        if req_logger is None:
-            return
+        # Safeguards sit behind this call: circuit-broken servers are skipped,
+        # a recovering server is ramped in, and a dead metrics feed routes on
+        # the last snapshot instead of failing every request.
+        choice: Optional[ServerChoice] = resilience.choose(
+            context, SERVERS, algorithm_instance, tried=tried
+        )
+        if choice is None:
+            break
+        if choice.reason.startswith("stale-feed"):
+            STATS["stale_routing"] += 1
+
+        server = choice.server
+        target_url = f"http://{server.host}:{server.port}/{path}"
+        if request.url.query:
+            target_url += f"?{request.url.query}"
+
+        state_before = _state_of(server)
+        server.inflight_local = getattr(server, 'inflight_local', 0) + 1
+
+        status = 0
+        content: Optional[bytes] = None
+        response_headers: Dict[str, str] = {}
+
+        try:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=headers,
+                content=body,
+            )
+            status = resp.status_code
+            content = resp.content
+            response_headers = dict(resp.headers)
+        except httpx.HTTPError as exc:
+            # Connection error, timeout or protocol error: the backend did not
+            # serve this request, so it is both a client-visible failure and a
+            # signal for the breaker.
+            status = 502
+            response_headers = {"x-proxy-error": str(exc)}
+        except Exception as exc:
+            status = 500
+            response_headers = {"x-proxy-error": str(exc)}
+        finally:
+            server.inflight_local = max(0, getattr(server, 'inflight_local', 0) - 1)
+
+        resilience.record_outcome(server, ok=status < 500)
+        tried.append(server.server_id)
+        final = {
+            "server_id": server.server_id,
+            "state": state_before,
+            "status": status,
+            "content": content,
+            "headers": response_headers,
+        }
+
+        # One retry, on a different server, for server-side failures only. A
+        # 404 or a 505 is the client's answer; retrying it would just add load.
+        if attempt == 1 or status not in resilience.RETRYABLE_STATUS:
+            break
+
+    if final is None:
+        raise HTTPException(status_code=503, detail="No healthy servers available")
+
+    # One row per client request, recording the outcome the client received.
+    # A retried request therefore appears once, with its total latency; the
+    # failed first attempt stays visible in the backend's own err_rate_5s
+    # instead of inflating the request count in the dataset.
+    duration_ms = (time.time() - request_started) * 1000
+    if req_logger is not None:
         try:
             await req_logger.log({
-                "timestamp": start_time,
+                "timestamp": request_started,
                 "req_type": context.req_type.value,
                 "payload_kb": _f(context.payload_kb),
-                "server_id": server.server_id,
+                "server_id": final["server_id"],
                 "response_ms": _f(duration_ms),
-                "status": int(status),
-                **state_before,
+                "status": int(final["status"]),
+                **final["state"],
             })
         except Exception as exc:
             print(f"logger failed: {exc}")
 
-    try:
-        resp = await client.request(
-            method=request.method,
-            url=target_url,
-            headers=headers,
-            content=body,
+    if final["content"] is None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Backend {final['server_id']} unreachable",
         )
-        duration_ms = (time.time() - start_time) * 1000
-        await _record(resp.status_code, duration_ms)
 
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            headers=dict(resp.headers),
-        )
-    except httpx.ConnectError:
-        server.health_check_failures = getattr(server, 'health_check_failures', 0) + 1
-        await _record(502, (time.time() - start_time) * 1000)
-        raise HTTPException(status_code=502, detail=f"Backend {server.server_id} unreachable")
-    except HTTPException:
-        raise
-    except Exception as e:
-        await _record(500, (time.time() - start_time) * 1000)
-        raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
-    finally:
-        server.inflight_local = max(0, getattr(server, 'inflight_local', 0) - 1)
+    return Response(
+        content=final["content"],
+        status_code=final["status"],
+        headers=final["headers"],
+    )
 
 
 if __name__ == "__main__":

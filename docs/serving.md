@@ -120,6 +120,12 @@ ratios are the claim:
 
 Both directions held in every repeat, so neither is a drift artefact.
 
+The same pair was re-measured after the resilience layer was added, which is
+inert when no request fails: least_conn 175 req/s / 24 / 76 / 137 ms, ml
+134 / 59 / 145 / 229 ms, paired p95 ratios 2.82, 1.46 and 1.41 (median 1.46),
+ml faster in 0 of 3. The verdict reproduces across sessions; the absolute
+numbers move with the host.
+
 **Against the plan's baseline, the learned router wins clearly**: about 9x
 better p95, 8x better p99, and 1.7x the throughput. round_robin's tail is set
 by the 0.15-CPU backend - it gives that server a quarter of the traffic no
@@ -163,6 +169,38 @@ price, and its queue spikes. It was reverted, and the numbers are kept here
 because a rejected variant with a measurement is more useful than a missing
 one.
 
+## The burst profile: a negative result
+
+The plan's M6 exit criterion is that ml shows a lower p95 than least_conn in
+the burst scenario. It does not - three paired repeats at 30 users:
+
+| policy | req/s | p50 | p95 | p99 | errors |
+|---|---:|---:|---:|---:|---:|
+| least_conn | 211 | 26 ms | 77 ms | 139 ms | 0.00% |
+| ml | 165 | 52 ms | 138 ms | 217 ms | 0.00% |
+
+| repeat | p95 least_conn -> ml | ratio | p99 ratio |
+|---|---:|---:|---:|
+| 0 | 77 -> 136 ms | 1.76 | 1.59 |
+| 1 | 74 -> 145 ms | 1.95 | 1.76 |
+| 2 | 81 -> 134 ms | 1.66 | 1.38 |
+
+ml lost all three pairs (median p95 ratio 1.76) with 22% less throughput. The
+routing distribution says why: under bursts the model sent 40-42% of traffic
+to backend3 (0.4 CPU) and only 22% to backend1 (0.8 CPU), where least_conn
+used 34 / 28 / 25 / 13. The model prices a server from a two-second-old
+snapshot, so a backend that was idle when the burst began still looks cheap,
+and its live queue correction - one predicted service time per in-flight
+request - is small next to the prediction gap while the snapshot says the
+bigger server is slow. By the time the snapshot shows the queue on backend3,
+the burst has paid for it. least_conn has no such lag: it counts the queue at
+the instant of the decision and divides by weight.
+
+This is the same lesson as the weighted variant above, from the other side:
+the model is a good *latency* estimator on a heterogeneous cluster, and it is
+not a better burst absorber than least-connections on this stack. The
+criterion is recorded as not met.
+
 ## Under a fault
 
 The `degraded` profile adds 400 ms to every request on backend3 and fails 35%
@@ -191,6 +229,29 @@ here; the error column is.
 This is the scenario the router is for: a static distribution keeps feeding a
 broken server forever, and a per-request prediction that reads the server's own
 error and latency signal does not.
+
+### With the resilience layer enabled
+
+The table above measures the router alone, before the circuit breaker, retry and
+slow start existed. The same pairing on the shipped stack:
+
+| policy | req/s | p50 | p95 | p99 | errors | share to the faulted backend |
+|---|---:|---:|---:|---:|---:|---:|
+| ml | 154 | 62 ms | 174 ms | 299 ms | 0.00% | 0% |
+| round_robin | 147 | 41 ms | 423 ms | 686 ms | 0.01% | 1-4% |
+
+The shared safeguards collapse the error difference: round_robin's requests to
+the faulted backend fail, the breaker opens it after three consecutive
+failures, and the retry moves the request to a live server, so its error rate
+falls from 8.73% to 0.01% - two requests out of 26,540, both a 502 from the
+0.15-CPU backend that round_robin keeps feeding. What remains is latency:
+round_robin probes the faulted backend again after every cooldown (1-4% of
+traffic pays 400 ms or a retry) and sends 19-24% of traffic to the 0.15-CPU
+backend, so its p95 stays 2.4x the router's (423 against 174 ms). The router
+sends the faulted backend nothing at all and leans on backend2 (45%).
+
+Both layers matter: the safeguards stop a single fault from becoming client
+errors under any policy, and the router is what keeps the tail low.
 
 ## What this does and does not show
 

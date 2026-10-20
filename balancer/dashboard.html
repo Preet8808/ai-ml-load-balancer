@@ -56,6 +56,7 @@
   .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; }
   .badge.ok { background: rgba(62,207,142,.15); color: var(--good); }
   .badge.off { background: rgba(255,93,93,.15); color: var(--bad); }
+  .badge.warn { background: rgba(255,176,32,.15); color: var(--warn); }
   .metrics { margin-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
   .metrics .k { color: var(--muted); }
   .metrics .v { text-align: right; font-variant-numeric: tabular-nums; }
@@ -122,7 +123,15 @@ function renderTiles(s) {
     tile("in flight", inflight) +
     tile("req/s (5 s)", rate.toFixed(0)) +
     tile("mean cpu", cpu.toFixed(1) + "%") +
-    tile("mean errors", (errs * 100).toFixed(2) + "%", errs > 0.05 ? "#ff5d5d" : null);
+    tile("mean errors", (errs * 100).toFixed(2) + "%", errs > 0.05 ? "#ff5d5d" : null) +
+    // The feed age is the staleness guard made visible: above 3 s the router
+    // serves from the last snapshot with least-connections instead of failing.
+    tile("feed age",
+         s.feed && s.feed.age_ms != null ? (s.feed.age_ms / 1000).toFixed(1) + " s" : "—",
+         s.feed && s.feed.stale ? "#ff5d5d" : null) +
+    tile("retries", (s.resilience && s.resilience.retries) || 0) +
+    tile("stale routing", (s.resilience && s.resilience.stale_routing) || 0,
+         s.resilience && s.resilience.stale_routing ? "#ffb020" : null);
 }
 
 function renderServers(s) {
@@ -134,10 +143,15 @@ function renderServers(s) {
     const quota = m.cpu_limit || x.cpu_limit || 0;
     const cls = cpu > 85 ? "crit" : cpu > 65 ? "hot" : "";
     const sent = x.sent_since_snapshot || 0;
-    return `<div class="server ${x.healthy ? "" : "down"}">
+    // Circuit state is per-request evidence, not the collector's slower health
+    // verdict: it opens in milliseconds when a backend stops answering.
+    const state = x.circuit_open ? "circuit open" : x.slow_start ? "slow start"
+                  : x.healthy ? "healthy" : "down";
+    const stateCls = x.circuit_open || !x.healthy ? "off" : x.slow_start ? "warn" : "ok";
+    return `<div class="server ${x.healthy && !x.circuit_open ? "" : "down"}">
       <div class="shead">
         <span class="sname">${x.server_id}</span>
-        <span class="badge ${x.healthy ? "ok" : "off"}">${x.healthy ? "healthy" : "down"}</span>
+        <span class="badge ${stateCls}">${state}</span>
       </div>
       <div class="metrics">
         <span class="k">cpu / limit</span><span class="v">${cpu.toFixed(1)}% of ${quota.toFixed(2)}</span>
