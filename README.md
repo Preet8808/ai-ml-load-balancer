@@ -109,6 +109,13 @@ The trained artifacts are committed, so `ml` works on a fresh clone. `data/` is
 not committed (20 MB of Parquet, rebuilt by the collector); after collecting
 your own, retrain with `python ml/train.py --data data --output models`.
 
+Three model algorithms are selectable. `ml` is the shipped router and `ml_herd`
+is the same class under the Phase 7 name: predicted latency times outstanding
+work. `ml_predictive` is the plan's no-herd-protection ablation - predicted
+latency only - and exists to be measured, not served. `python bench/run_matrix.py`
+runs the Phase 7 campaign; `ml/train.py --drop-features …` runs the feature
+ablations.
+
 `/stats` reports the model's serving state too, so a real prediction-driven run
 can be told apart from one that silently fell back to a heuristic:
 
@@ -221,8 +228,8 @@ restoring it promoted it back (`promotions 1`). See `docs/monitoring.md`.
 | M4 | 6 | Dataset v1 (200k+ rows) | done - 218,011 rows, 18 cells |
 | M5 | 8 | Model beats naive baseline by 30%+ MAE | done - +53.9% (XGBoost) |
 | M6 | 9 | MVP: ML balancer demo | partial - stale-feed fallback and routing overhead met; burst-vs-least_conn measured and **not met** (p95 1.76x worse) |
-| M7 | 11 | Feature freeze, all tests green | partial - tests green; stress, chaos, slow start, decision log and drift guard done; `ml_predictive`/`ml_herd` split and reference configs still open |
-| M8 | 12 | Raw results complete | planned |
+| M7 | 11 | Feature freeze, all tests green | done - 121 tests; stress, chaos, slow start, decision log, drift guard, `ml_predictive`/`ml_herd` split, p95-over-time panel and Nginx/HAProxy reference configs |
+| M8 | 12 | Raw results complete | in progress - 125-cell campaign (`bench/run_matrix.py`) running; ablations and unseen-profile tests complete |
 | M9 | 14 | Final submission | planned |
 
 See `docs/dataset.md` for the per-cell table, the signal gate, the model
@@ -235,16 +242,17 @@ A/B evidence, `docs/resilience.md` for the safeguards, and
 Phase 5 and 6 name a few things this repo does not have yet. They are listed
 rather than implied to be done:
 
-- **`ml_predictive` vs `ml_herd`.** Herd protection is built into `ml` (the
-  in-flight queue term) rather than exposed as two selectable algorithms.
-- **Dashboard depth.** It shows per-server CPU, in-flight, EWMA, p95, errors,
-  circuit state, feed age, retries, stale-routing counts, the ML
-  artifact/decision counters, drift state and the last 15 decisions with
-  predicted-vs-actual, but not p95 over time.
-- **Reference configs.** No Nginx or HAProxy configuration to compare a mature
-  proxy against.
-- **Phase 7 matrix.** The 5-algorithm x 5-scenario x 5-repeat campaign has not
-  been run; the current dataset is a documented 18-cell reduced campaign.
+- **Reference configs are configs, not measurements.** Nginx and HAProxy start,
+  serve traffic through the same backends and are documented in `deploy/`, but
+  they write no request log of the shape this project measures from, so they are
+  not in the Phase 7 campaign yet. A client-side harness is the remaining work.
+- **Phase 7 matrix.** The 5-algorithm x 5-scenario x 5-repeat campaign is
+  running as this is committed; results land in `docs/results.md`. The 18-cell
+  dataset campaign documented in `docs/dataset.md` remains the reduced campaign
+  the model was trained on.
+- **M6's burst criterion.** ML still loses to least_conn on burst p95. The
+  Phase 7 matrix will show whether that holds across the five scenarios; the
+  negative result is kept either way.
 
 ## License
 MIT

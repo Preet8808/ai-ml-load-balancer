@@ -97,7 +97,16 @@ class MLRouter(Algorithm):
 
     name = "ml"
 
-    def __init__(self, model_path: Optional[str] = None, model_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        model_dir: Optional[Path] = None,
+        herd: bool = True,
+    ):
+        # `herd` is the Phase 5 herd protection: charge each candidate its
+        # outstanding work. `ml_predictive` turns it off so the ablation can
+        # measure what the queue term is worth; the shipped router keeps it on.
+        self.herd = herd
         self.path: Optional[Path] = Path(model_path) if model_path else None
         self.model: Any = None
         self._predict: Optional[Callable[[Any], Any]] = None
@@ -234,10 +243,17 @@ class MLRouter(Algorithm):
             # much traffic as least_conn does, but in bursts the stale
             # prediction cannot price, and its p95 nearly doubled.
             loads = [max(int(server.inflight), 0) for server in healthy]
-            score_ms = [
-                float(prediction) * (1.0 + load)
-                for prediction, load in zip(predicted_ms, loads)
-            ]
+            if self.herd:
+                score_ms = [
+                    float(prediction) * (1.0 + load)
+                    for prediction, load in zip(predicted_ms, loads)
+                ]
+            else:
+                # The ablation: trust the snapshot alone. On a two-second-old
+                # feed every candidate looks equally idle and the minimum is a
+                # coin toss between servers that have since taken different
+                # amounts of work, which is the herding this term prevents.
+                score_ms = [float(prediction) for prediction in predicted_ms]
 
             if self.drift.demoted:
                 # The guard has demoted the model. Route on least-connections,
@@ -265,15 +281,19 @@ class MLRouter(Algorithm):
 
         # Among servers the expected wait cannot separate, the least loaded one
         # wins, so that an uninformative model still cannot concentrate all
-        # traffic on a single backend.
-        index = min(tied, key=lambda i: (loads[i], predicted_ms[i]))
+        # traffic on a single backend. The predictive ablation deliberately
+        # keeps the raw order instead: that is what "no herd protection" means.
+        if self.herd:
+            index = min(tied, key=lambda i: (loads[i], predicted_ms[i]))
+        else:
+            index = min(tied, key=lambda i: (predicted_ms[i], i))
         server = healthy[index]
         server.sent_since_snapshot += 1
         self.decisions += 1
 
         return ServerChoice(
             server=server,
-            reason=f"ml(pred {predicted_ms[index]:.1f}ms, inflight {int(server.inflight)})",
+            reason=f"{self.name}(pred {predicted_ms[index]:.1f}ms, inflight {int(server.inflight)})",
             predicted_rt_ms=float(predicted_ms[index]),
             model_driven=True,
         )
@@ -310,3 +330,31 @@ class MLRouter(Algorithm):
             self.fallbacks += 1
             choice.reason = f"ml-fallback ({reason})"
         return choice
+
+
+class MLHerd(MLRouter):
+    """
+    The shipped ML router, under the plan's name for it.
+
+    `ml` is the same router and stays as the default so existing configs,
+    benchmarks and docs keep working; `ml_herd` exists so the Phase 7 matrix can
+    name the two variants side by side.
+    """
+
+    name = "ml_herd"
+
+
+class MLPredictive(MLRouter):
+    """
+    The Phase 7 ablation: predicted latency with no in-flight correction.
+
+    Its purpose is to be measured, not to be served. On a stale snapshot every
+    backend looks equally idle, so the minimum is decided by a prediction the
+    queue has already invalidated - `docs/serving.md` has the herding numbers
+    that motivated the queue term.
+    """
+
+    name = "ml_predictive"
+
+    def __init__(self, model_path: Optional[str] = None, model_dir: Optional[Path] = None):
+        super().__init__(model_path=model_path, model_dir=model_dir, herd=False)

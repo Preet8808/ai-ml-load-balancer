@@ -236,9 +236,19 @@ def measure_inference(model, X: pd.DataFrame, n_servers: int = 5, trials: int = 
 # Main training run
 # ---------------------------------------------------------------------------
 
-def train(data_dir: str = "data", output_dir: str = "models") -> Dict[str, Any]:
+def train(
+    data_dir: str = "data",
+    output_dir: str = "models",
+    drop: tuple = (),
+    save_artifacts: bool = True,
+    run_cv: bool = True,
+    only: str | None = None,
+    tag: str = "",
+) -> Dict[str, Any]:
     print("=" * 70)
     print("  Phase 4: model training")
+    if drop:
+        print(f"  ablation: dropping {', '.join(drop)}")
     print("=" * 70)
 
     df, info = load_dataset(data_dir)
@@ -252,7 +262,11 @@ def train(data_dir: str = "data", output_dir: str = "models") -> Dict[str, Any]:
     print(f"  rows: {info['rows_raw']:,} raw -> {info['rows_after_warmup']:,} after warm-up")
     print(f"  runs: {info['runs']}")
 
-    X, y = build_features(df)
+    # The ablation runs train on a narrower frame; everything else - split,
+    # seed, hyperparameters, target - is identical, so the MAE difference is
+    # attributable to the dropped columns.
+    columns = [c for c in feature_columns() if c not in drop]
+    X, y = build_features(df, columns)
     y_log = y.to_numpy()
     y_ms = df.loc[y.index, TARGET_COLUMN].to_numpy(dtype=float)
 
@@ -272,18 +286,22 @@ def train(data_dir: str = "data", output_dir: str = "models") -> Dict[str, Any]:
     # -- naive baseline ----------------------------------------------------
     # The server's own reported EWMA. This is what any heuristic router can
     # already do without a model, so a model must beat it to be worth shipping.
-    print("\n  [1/4] naive baseline (server's reported rt_ewma_ms)")
-    ewma_log = np.log1p(X["rt_ewma_ms"].to_numpy(dtype=float))
-    baseline = evaluate(y_test, ewma_log[test_mask], y_test_ms)
-    baseline["spearman"] = spearman(ewma_log[test_mask], y_test)
-    baseline["rank_of_4"] = float("nan")
-    results["naive"] = {"metrics": baseline}
-    print(f"        MAE(log)={baseline['mae_log']:.4f}  MAE(ms)={baseline['mae_ms']:.1f}  "
-          f"R2={baseline['r2_log']:+.4f}  rho={baseline['spearman']:.3f}")
+    if "rt_ewma_ms" in X:
+        print("\n  [1/4] naive baseline (server's reported rt_ewma_ms)")
+        ewma_log = np.log1p(X["rt_ewma_ms"].to_numpy(dtype=float))
+        baseline = evaluate(y_test, ewma_log[test_mask], y_test_ms)
+        baseline["spearman"] = spearman(ewma_log[test_mask], y_test)
+        baseline["rank_of_4"] = float("nan")
+        results["naive"] = {"metrics": baseline}
+        print(f"        MAE(log)={baseline['mae_log']:.4f}  MAE(ms)={baseline['mae_ms']:.1f}  "
+              f"R2={baseline['r2_log']:+.4f}  rho={baseline['spearman']:.3f}")
 
     # -- models ------------------------------------------------------------
     models = build_models()
-    entries = [(n, m) for n, m in models.items() if m is not None]
+    entries = [
+        (n, m) for n, m in models.items()
+        if m is not None and (only is None or n == only)
+    ]
     total = len(entries) + 1
     for i, (name, model) in enumerate(entries, start=2):
         print(f"\n  [{i}/{total}] {name}")
@@ -299,10 +317,11 @@ def train(data_dir: str = "data", output_dir: str = "models") -> Dict[str, Any]:
         metrics = evaluate(y_test, pred, y_test_ms)
         metrics["spearman"] = spearman(pred, y_test)
 
-        cv = cross_validate(model, X_train, y_train, groups_all[train_mask])
-        if cv:
-            metrics["cv_r2_log"] = cv["r2_log"]
-            metrics["cv_mae_ms"] = cv["mae_ms"]
+        if run_cv:
+            cv = cross_validate(model, X_train, y_train, groups_all[train_mask])
+            if cv:
+                metrics["cv_r2_log"] = cv["r2_log"]
+                metrics["cv_mae_ms"] = cv["mae_ms"]
 
         timing = measure_inference(model, X)
         metrics.update({f"infer_{k}": v for k, v in timing.items()})
@@ -325,9 +344,9 @@ def train(data_dir: str = "data", output_dir: str = "models") -> Dict[str, Any]:
             order = np.argsort(importances)[::-1]
             print(f"\n  feature importance ({best}):")
             for idx in order:
-                print(f"    {FEATURE_COLUMNS[idx]:20s} {importances[idx]:.4f}")
+                print(f"    {columns[idx]:20s} {importances[idx]:.4f}")
             results[best]["feature_importance"] = [
-                [FEATURE_COLUMNS[i], float(importances[i])] for i in order
+                [columns[i], float(importances[i])] for i in order
             ]
 
     # -- persist -----------------------------------------------------------
@@ -338,23 +357,24 @@ def train(data_dir: str = "data", output_dir: str = "models") -> Dict[str, Any]:
     ).hexdigest()[:10]
 
     saved = []
-    for name, entry in results.items():
-        if "model" not in entry:
-            continue
-        path = out / f"{name}_{data_hash}.joblib"
-        joblib.dump(
-            {
-                "model": entry["model"],
-                "feature_columns": feature_columns(),
-                "target": "log1p(response_ms)",
-                "data_hash": data_hash,
-                "train_rows": int(len(X_train)),
-                "runs": info["runs"],
-            },
-            path,
-        )
-        saved.append(path.name)
-        print(f"  saved {path.name}")
+    if save_artifacts:
+        for name, entry in results.items():
+            if "model" not in entry:
+                continue
+            path = out / f"{name}_{data_hash}.joblib"
+            joblib.dump(
+                {
+                    "model": entry["model"],
+                    "feature_columns": columns,
+                    "target": "log1p(response_ms)",
+                    "data_hash": data_hash,
+                    "train_rows": int(len(X_train)),
+                    "runs": info["runs"],
+                },
+                path,
+            )
+            saved.append(path.name)
+            print(f"  saved {path.name}")
 
     summary = {
         name: {k: v for k, v in entry.items() if k != "model"}
@@ -366,10 +386,11 @@ def train(data_dir: str = "data", output_dir: str = "models") -> Dict[str, Any]:
         "runs": info["runs"],
         "train_runs": int(len(np.unique(groups_all[train_mask]))),
         "test_runs": test_runs,
-        "feature_columns": feature_columns(),
+        "feature_columns": columns,
+        "dropped_features": list(drop),
         "best_model": best,
     }
-    summary_path = out / f"training_report_{data_hash}.json"
+    summary_path = out / f"training_report_{data_hash}{tag}.json"
     summary_path.write_text(json.dumps(summary, indent=2, default=str))
     print(f"  saved {summary_path.name}")
 
@@ -400,8 +421,24 @@ def main():
     parser = argparse.ArgumentParser(description="Train load-balancer response-time models")
     parser.add_argument("--data", default="data")
     parser.add_argument("--output", default="models")
+    parser.add_argument("--drop-features", default="",
+                        help="comma-separated feature columns to ablate")
+    parser.add_argument("--only", default=None, help="train only this estimator")
+    parser.add_argument("--no-cv", action="store_true", help="skip grouped cross-validation")
+    parser.add_argument("--no-artifacts", action="store_true",
+                        help="write the report only (ablation runs must not touch models/)")
+    parser.add_argument("--tag", default="", help="suffix for the report filename")
     args = parser.parse_args()
-    train(args.data, args.output)
+    drop = tuple(c.strip() for c in args.drop_features.split(",") if c.strip())
+    train(
+        args.data,
+        args.output,
+        drop=drop,
+        save_artifacts=not args.no_artifacts,
+        run_cv=not args.no_cv,
+        only=args.only,
+        tag=args.tag,
+    )
 
 
 if __name__ == "__main__":

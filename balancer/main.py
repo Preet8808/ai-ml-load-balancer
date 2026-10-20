@@ -45,6 +45,36 @@ decision_logger: Optional[RequestLogger] = None
 # dashboard can show predicted-versus-actual without a run being started.
 RECENT_DECISIONS: "collections.deque[Dict[str, Any]]" = collections.deque(maxlen=100)
 
+# Successful requests' user-visible latency, for the dashboard's p95-over-time
+# panel. A time window, not a request count: 60 s at the traffic rates this
+# host can produce needs ~9,000 entries, so the cap is deliberately generous.
+# Percentiles are nearest-rank over the window and are computed once per
+# /stats poll, not per request.
+RECENT_LATENCIES: "collections.deque[tuple[float, float]]" = collections.deque(maxlen=20000)
+LATENCY_WINDOW_S = 60.0
+
+
+def latency_window(now: float) -> Dict[str, Any]:
+    """p50/p95/p99 of successful requests in the last LATENCY_WINDOW_S."""
+    cutoff = now - LATENCY_WINDOW_S
+    values = sorted(ms for ts, ms in RECENT_LATENCIES if ts >= cutoff)
+    if not values:
+        return {"window_s": LATENCY_WINDOW_S, "samples": 0,
+                "p50": None, "p95": None, "p99": None}
+
+    def at(q: float) -> float:
+        # Nearest-rank: index of the first value at or above the quantile.
+        index = max(0, min(len(values) - 1, int(round(q * len(values))) - 1))
+        return round(values[index], 1)
+
+    return {
+        "window_s": LATENCY_WINDOW_S,
+        "samples": len(values),
+        "p50": at(0.50),
+        "p95": at(0.95),
+        "p99": at(0.99),
+    }
+
 # Resilience counters, surfaced through /stats. They count routing decisions and
 # retries rather than requests: a stale-feed decision can also happen on the
 # single retry of a failed attempt.
@@ -323,6 +353,8 @@ async def stats():
             "circuits_open": [s.server_id for s in SERVERS if resilience.circuit_open(s, now)],
             "circuit_opens": sum(s.circuit_opens for s in SERVERS),
         },
+        # The dashboard's latency panel: a 60 s window, recomputed per poll.
+        "latency": latency_window(now),
         # Newest last, rounded for the wire. The full-precision rows go to the
         # decision log; this is what the dashboard's predicted-vs-actual table
         # and a demo read.
@@ -509,6 +541,10 @@ async def proxy(request: Request, path: str):
     # failed first attempt stays visible in the backend's own err_rate_5s
     # instead of inflating the request count in the dataset.
     duration_ms = (time.time() - request_started) * 1000
+    if final["status"] < 400:
+        # Successful requests only, matching the A/B harness: a 503 returns
+        # fast and would drag the dashboard's p95 down.
+        RECENT_LATENCIES.append((time.time(), duration_ms))
     if req_logger is not None:
         try:
             await req_logger.log({

@@ -20,7 +20,7 @@ import pytest
 
 from balancer.algorithms import algorithm_names, get_algorithm
 from balancer.interfaces import RequestContext, RequestType, ServerInfo, ServerMetrics
-from balancer.ml_router import MLRouter, find_artifact
+from balancer.ml_router import MLHerd, MLPredictive, MLRouter, find_artifact
 from ml.features import (
     FEATURE_COLUMNS,
     build_serving_array,
@@ -199,6 +199,39 @@ def test_unseparated_predictions_break_ties_by_inflight(tmp_path):
     choice = router.choose_server(make_request(), servers)
 
     assert choice.server.server_id == "s2"
+
+
+# ---------------------------------------------------------------------------
+# The herd split (Phase 6/7): `ml_herd` is the shipped router, `ml_predictive`
+# the ablation without the queue term.
+# ---------------------------------------------------------------------------
+
+def test_registry_exposes_both_ml_variants(tmp_path):
+    assert {"ml", "ml_herd", "ml_predictive"} <= set(algorithm_names())
+    assert get_algorithm("ml").herd is True
+    assert get_algorithm("ml_herd").herd is True
+    assert get_algorithm("ml_predictive").herd is False
+
+
+def test_predictive_variant_ignores_inflight_where_the_shipped_router_charges_it(tmp_path):
+    predictions = [2.0, 2.0]
+    servers = [make_server("busy", inflight=40), make_server("idle", inflight=0)]
+
+    herd = MLHerd(model_dir=tmp_path)
+    herd.model = FakeModel(predictions)
+    assert herd.choose_server(make_request(), servers).server.server_id == "idle"
+
+    predictive = MLPredictive(model_dir=tmp_path)
+    predictive.model = FakeModel(predictions)
+    choice = predictive.choose_server(make_request(), servers)
+
+    # With no queue term both predictions are tied, so the first candidate
+    # wins regardless of the 40 requests already outstanding on it: this is
+    # the herding the shipped router prevents, made measurable.
+    assert choice.server.server_id == "busy"
+    assert choice.reason.startswith("ml_predictive(pred")
+    assert predictive.decisions == 1
+    assert predictive.status()["drift"]["demoted"] is False
 
 
 def test_no_healthy_servers_returns_none(tmp_path):

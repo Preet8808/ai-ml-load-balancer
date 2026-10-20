@@ -142,6 +142,7 @@ def run_generator(
     timeout: float,
     cpus: str | None = None,
     env: dict[str, object] | None = None,
+    name: str | None = None,
 ) -> subprocess.CompletedProcess:
     """
     Run a command in a throwaway container on the stack's network.
@@ -160,9 +161,13 @@ def run_generator(
     # only ever reads its script. as_posix() because Docker wants forward
     # slashes even for a Windows host path.
     bench_mount = f"{PROJECT_ROOT.as_posix()}/bench:/app/bench:ro"
+    # A name is optional; the Phase 7 matrix uses one so the generator's CPU
+    # share can be sampled with `docker stats` while it runs.
+    name_args = ["--name", name] if name else []
     return _docker(
         [
             "run", "--rm",
+            *name_args,
             "--network", balancer_network(),
             "--cpus", cpus or GENERATOR_CPUS,
             "--memory", GENERATOR_MEM,
@@ -175,7 +180,14 @@ def run_generator(
     )
 
 
-def run_locust(profile: str, out_prefix: Path, duration: int, users: int) -> bool:
+def run_locust(
+    profile: str,
+    out_prefix: Path,
+    duration: int,
+    users: int,
+    name: str | None = None,
+    extra_env: dict[str, object] | None = None,
+) -> bool:
     """
     Drive load from a separate container on the compose network.
 
@@ -210,11 +222,13 @@ def run_locust(profile: str, out_prefix: Path, duration: int, users: int) -> boo
         result = run_generator(
             cmd,
             timeout=duration + 180,
+            name=name,
             env={
                 "TRAFFIC_PROFILE": profile,
                 "TRAFFIC_USERS": users,
                 "BENCH_DURATION": duration,
                 "SPAWN_RATE": PROFILE_SPAWN_RATE,
+                **(extra_env or {}),
             },
         )
         if result.returncode != 0:

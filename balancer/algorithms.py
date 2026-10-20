@@ -204,7 +204,14 @@ ALGORITHMS = {
 # Algorithms whose module is imported only when they are selected. The ML
 # router needs joblib and a fitted estimator, which a container serving
 # round-robin should not have to import - or even have installed.
-LAZY_ALGORITHMS = {"ml": ("balancer.ml_router", "MLRouter")}
+LAZY_ALGORITHMS = {
+    # `ml` is the shipped router and `ml_herd` its explicit name; they are the
+    # same class. `ml_predictive` is the no-queue-term ablation, selectable so
+    # Phase 7 can measure it on live traffic instead of arguing about it.
+    "ml": ("balancer.ml_router", "MLRouter"),
+    "ml_herd": ("balancer.ml_router", "MLHerd"),
+    "ml_predictive": ("balancer.ml_router", "MLPredictive"),
+}
 
 
 def algorithm_names() -> List[str]:

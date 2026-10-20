@@ -71,6 +71,14 @@
     color: var(--muted); max-width: 300px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap;
   }
+  .chart { width: 100%; height: 130px; display: block; }
+  .chart .grid { stroke: var(--line); stroke-width: 1; }
+  .chart .p95 { fill: none; stroke: var(--accent); stroke-width: 2; }
+  .chart .p50 { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+  .chart text { fill: var(--muted); font-size: 10px; }
+  .legend { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .legend b { color: var(--accent); font-weight: 600; }
+  .legend i { color: var(--muted); font-style: normal; }
   .metrics { margin-top: 10px; display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
   .metrics .k { color: var(--muted); }
   .metrics .v { text-align: right; font-variant-numeric: tabular-nums; }
@@ -111,6 +119,12 @@
 <div class="panel" id="mlpanel" style="margin-bottom:14px; display:none">
   <div class="label">Model serving</div>
   <div class="mlrow" id="mlrow"></div>
+</div>
+
+<div class="panel" style="margin-bottom:14px">
+  <div class="label">Latency <span style="text-transform:none;letter-spacing:0">— p95 and p50 of the last 60 s of successful requests, plotted as the dashboard polls</span></div>
+  <svg class="chart" id="chart" viewBox="0 0 600 130" preserveAspectRatio="none"></svg>
+  <div class="legend" id="legend">waiting for traffic…</div>
 </div>
 
 <div class="row" id="servers"></div>
@@ -217,6 +231,50 @@ function renderMl(s) {
       · drift-routed ${ml.drift_routed}</div>` : ""}`;
 }
 
+// p95 history. The server reports a 60 s window on every poll; this keeps the
+// last two minutes of those windows, which is what "p95 over time" means here:
+// no client-side re-aggregation and no invented numbers.
+const LATENCY_HISTORY = [];
+const HISTORY_POINTS = 120;
+
+function renderLatency(s) {
+  const lat = s.latency;
+  const svg = document.getElementById("chart");
+  const legend = document.getElementById("legend");
+  if (!lat || lat.p95 == null) {
+    legend.textContent = "waiting for traffic…";
+    return;
+  }
+  const point = { p50: lat.p50, p95: lat.p95, t: Date.now() / 1000 };
+  const last = LATENCY_HISTORY[LATENCY_HISTORY.length - 1];
+  // One point per poll: /stats is polled every second, and a retry can deliver
+  // two responses in the same second.
+  if (!last || point.t - last.t >= 0.5) {
+    LATENCY_HISTORY.push(point);
+    if (LATENCY_HISTORY.length > HISTORY_POINTS) LATENCY_HISTORY.shift();
+  }
+
+  const W = 600, H = 130, PAD = 10;
+  const max = Math.max(50, ...LATENCY_HISTORY.map(p => p.p95)) * 1.1;
+  const x = i => PAD + (i / Math.max(1, LATENCY_HISTORY.length - 1)) * (W - 2 * PAD);
+  const y = v => H - PAD - Math.min(v / max, 1) * (H - 2 * PAD);
+  const line = key => LATENCY_HISTORY
+    .map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`)
+    .join(" ");
+
+  svg.innerHTML = `
+    <line class="grid" x1="${PAD}" y1="${y(max)}" x2="${W - PAD}" y2="${y(max)}"></line>
+    <line class="grid" x1="${PAD}" y1="${y(0)}" x2="${W - PAD}" y2="${y(0)}"></line>
+    <path class="p50" d="${line("p50")}"></path>
+    <path class="p95" d="${line("p95")}"></path>
+    <text x="${PAD}" y="${PAD + 4}">${max.toFixed(0)} ms</text>
+    <text x="${W - PAD}" y="${H - 1}" text-anchor="end">now</text>`;
+  legend.innerHTML =
+    `p95 <b>${lat.p95.toFixed(0)} ms</b> · p50 <i>${lat.p50.toFixed(0)} ms</i>` +
+    ` · ${lat.samples.toLocaleString()} requests in the window` +
+    ` · ${LATENCY_HISTORY.length}s of history`;
+}
+
 function renderDecisions(s) {
   const table = document.getElementById("decisions");
   const rows = (s.decisions && s.decisions.recent) || [];
@@ -276,6 +334,7 @@ async function tick() {
     renderTiles(s);
     renderServers(s);
     renderMl(s);
+    renderLatency(s);
     renderDecisions(s);
     document.getElementById("status").innerHTML =
       `<span class="dot"></span>live — ${new Date().toLocaleTimeString()}`;

@@ -92,12 +92,17 @@ def feature_columns() -> List[str]:
 # Training-time transformation
 # ---------------------------------------------------------------------------
 
-def build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+def build_features(
+    df: pd.DataFrame,
+    columns: List[str] | None = None,
+) -> tuple[pd.DataFrame, pd.Series]:
     """
     Build (X, y) from raw log rows.
 
     Returns X as a float frame with FEATURE_COLUMNS in order, and y as
-    log1p(response_ms) with the target clipped at TARGET_CAP_MS.
+    log1p(response_ms) with the target clipped at TARGET_CAP_MS. `columns`
+    narrows the frame for the Phase 7 feature ablations; serving always uses
+    the full layout, and the artifact records whichever list trained it.
     """
     df = df.copy()
 
@@ -131,7 +136,8 @@ def build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
         work[f"req_type_{t}"] = (req_type == t).astype(float)
 
     y = np.log1p(target.to_numpy())
-    return work[FEATURE_COLUMNS].astype(float), pd.Series(y, index=work.index, name="log_response_ms")
+    selected = list(columns) if columns is not None else FEATURE_COLUMNS
+    return work[selected].astype(float), pd.Series(y, index=work.index, name="log_response_ms")
 
 
 def to_ms(pred_log: np.ndarray) -> np.ndarray:
