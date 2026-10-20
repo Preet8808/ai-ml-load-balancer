@@ -165,14 +165,36 @@ round_robin's fixed 25%, which shows up where it matters:
 | M3 | 5 | Live metrics and logs flowing | done |
 | M4 | 6 | Dataset v1 (200k+ rows) | done - 218,011 rows, 18 cells |
 | M5 | 8 | Model beats naive baseline by 30%+ MAE | done - +53.9% (XGBoost) |
-| M6 | 9 | MVP: ML balancer demo | done - ml beats round_robin 9x on p95; least_conn still ahead |
-| M7 | 11 | Feature freeze, all tests green | planned |
+| M6 | 9 | MVP: ML balancer demo | partial - demo works and beats round_robin; staleness fallback and the burst-vs-least_conn trial are open |
+| M7 | 11 | Feature freeze, all tests green | partial - 90 unit/model tests green in CI; stress, chaos and slow start are open |
 | M8 | 12 | Raw results complete | planned |
 | M9 | 14 | Final submission | planned |
 
 See `docs/dataset.md` for the per-cell table, the signal gate, the model
 comparison and the M5 verdict, and `docs/serving.md` for the serving path and
 the A/B evidence.
+
+### Open items against the plan
+
+Phase 5 and 6 name a few things this repo does not have yet. They are listed
+rather than implied to be done:
+
+- **Staleness fallback.** When the collector's snapshots go stale, every
+  server is unhealthy and the balancer answers 503. The plan asks for a switch
+  to least-connections instead. The missing-model fallback does exist: a bad or
+  absent artifact routes on least-connections and says so in `/stats`.
+- **Drift guard.** No rolling-MAE monitor that demotes a model whose live
+  error grows; served predictions are not persisted, so it needs a decision
+  log first.
+- **`ml_predictive` vs `ml_herd`.** Herd protection is built into `ml` (the
+  in-flight queue term) rather than exposed as two selectable algorithms.
+- **Resilience.** No circuit breaker, single retry, or slow start on rejoin. A
+  dead backend is failed out by health checks after three failed polls, about
+  6 s at the configured 2 s interval.
+- **Phase 6 hardening.** No stress run above capacity, no chaos script, no
+  Nginx/HAProxy reference configs. The dashboard shows per-server CPU,
+  in-flight, EWMA, p95 and errors, and the ML artifact/decision counters, but
+  not predicted-vs-actual, a decision log, or p95 over time.
 
 ## License
 MIT
