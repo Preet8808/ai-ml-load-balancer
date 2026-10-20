@@ -274,6 +274,110 @@ async def get_algorithm_name():
     return {"algorithm": ALGORITHM, "available": algorithm_names()}
 
 
+def _demo_server(server_id: str) -> ServerInfo:
+    target = next((s for s in SERVERS if s.server_id == server_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Unknown server_id: {server_id}")
+    return target
+
+
+async def _backend_control(
+    target: ServerInfo, path: str, params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Drive a backend's demo-only /slow or /fault control endpoint.
+
+    Those endpoints are deliberately not published on the host: only the
+    balancer can reach backend3 inside the compose network. This thin proxy
+    keeps the dashboard's demo buttons working without exposing another port
+    and without adding Docker control to the balancer.
+    """
+    url = f"http://{target.host}:{target.port}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as control:
+            response = await control.get(url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"{target.server_id}{path} control failed: {exc}",
+        )
+    return {"path": path, "request": params, "response": payload}
+
+
+@app.post("/admin/demo/degrade")
+async def demo_degrade(
+    server_id: str = "backend3",
+    duration_s: float = 45.0,
+    delay_ms: int = 400,
+    error_rate: float = 0.35,
+):
+    """
+    Make one backend slow and flaky for a bounded window.
+
+    Demo-only convenience around the existing backend controls. It does not
+    change routing: the router discovers the fault from the same metrics it
+    would see for a real dependency slowdown.
+    """
+    target = _demo_server(server_id)
+    actions = [
+        await _backend_control(
+            target, "/slow", {"ms": max(0, delay_ms), "duration_s": max(0.0, duration_s)}
+        ),
+        await _backend_control(
+            target,
+            "/fault",
+            {"error_rate": min(1.0, max(0.0, error_rate)), "duration_s": max(0.0, duration_s)},
+        ),
+    ]
+    return {
+        "status": "ok",
+        "server_id": target.server_id,
+        "duration_s": duration_s,
+        "actions": actions,
+    }
+
+
+@app.post("/admin/demo/fail")
+async def demo_fail(
+    server_id: str = "backend3",
+    duration_s: float = 12.0,
+):
+    """
+    Inject a 100% error fault for a short window.
+
+    The backend stays alive, so its health probe remains green; the circuit
+    breaker opens from the request failures and new work moves away. That is a
+    useful demo of the failure path without requiring a Docker command. Actual
+    container-kill evidence remains the H4 matrix runs in docs/results.md.
+    """
+    target = _demo_server(server_id)
+    actions = [
+        await _backend_control(target, "/slow", {"ms": 0, "duration_s": 0}),
+        await _backend_control(
+            target, "/fault", {"error_rate": 1.0, "duration_s": max(0.0, duration_s)}
+        ),
+    ]
+    return {
+        "status": "ok",
+        "server_id": target.server_id,
+        "duration_s": duration_s,
+        "actions": actions,
+    }
+
+
+@app.post("/admin/demo/clear")
+async def demo_clear(server_id: str = "backend3"):
+    """Clear slow and fault injection on one backend."""
+    target = _demo_server(server_id)
+    actions = [
+        await _backend_control(target, "/slow", {"ms": 0, "duration_s": 0}),
+        await _backend_control(target, "/fault", {"error_rate": 0.0, "duration_s": 0}),
+    ]
+    return {"status": "ok", "server_id": target.server_id, "actions": actions}
+
+
 @app.api_route("/admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def admin_not_found(path: str):
     """

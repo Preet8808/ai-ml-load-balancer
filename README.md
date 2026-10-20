@@ -123,7 +123,10 @@ The balancer serves its own dashboard at <http://localhost:9090/>. It shows each
 backend's CPU relative to its quota, in-flight requests, requests routed in the
 last second, EWMA and p95 latency, and error rate, and it switches the routing
 algorithm live - so the same traffic can be shown being routed differently
-without restarting anything.
+without restarting anything. The **Demo controls** card can also start browser
+traffic (opening and sealing a run), inject a backend3 slow/error fault, and
+stress or restore the drift guard, so a live demo does not need a terminal for
+those steps. The browser driver is intentionally not a benchmark client.
 
 ```bash
 docker compose up -d                                   # dashboard at localhost:9090

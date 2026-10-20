@@ -174,6 +174,15 @@ error rate is reported separately, as in the A/B harness. The window is a
 host's peak rate - and the percentile is computed once per poll, not per
 request.
 
+The **Demo controls** card is a convenience layer for live demonstrations. Its
+browser driver starts and seals a run and sends about 24 req/s from the open tab;
+it is not Locust and its counts are not capacity evidence. **Degrade** and
+**Fail** proxy to backend3's existing `/slow` and `/fault` controls through the
+balancer, so the backend control ports stay private; **Fail** is an injected
+error fault, so the health probe remains green even while the circuit is open.
+**Stress** and **Restore** call the same `/admin/drift` endpoint documented
+above. No routing code reads the panel.
+
 ## Limits
 
 - **Live MAE is not the training MAE.** The training number is measured on the

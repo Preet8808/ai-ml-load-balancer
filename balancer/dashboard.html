@@ -8,10 +8,12 @@
   audience. The algorithm switcher posts to /admin/algorithm, so the effect of
   a routing policy on the same traffic can be shown live.
 
-  Presentation only: every value still comes from /stats, and the element IDs
-  below are the same data bindings as before the redesign. The live-dot pulse
-  is the only continuous animation; the boot skeleton, entrance, hover lift and
-  circular theme reveal are one-shot or interaction-driven.
+  The routing data is read-only: every value still comes from /stats. The
+  Demo controls card adds convenience actions for a live demo (browser traffic,
+  backend3 fault injection, drift stress); those post to admin endpoints and
+  never make routing decisions. The live-dot pulse is the only continuous
+  animation; the boot skeleton, entrance, hover lift and circular theme reveal
+  are one-shot or interaction-driven.
 -->
 <html lang="en">
 <head>
@@ -88,7 +90,7 @@
     background: #fff; border: 1px solid var(--line);
     padding: 1px 6px; border-radius: 6px;
   }
-  #overview, #backends, #latency, #decisions { scroll-margin-top: 104px; }
+  #overview, #demo-controls, #backends, #latency, #decisions { scroll-margin-top: 104px; }
 
   .app {
     display: flex; align-items: flex-start; gap: 22px;
@@ -280,6 +282,64 @@
   .picker button.on {
     background: var(--ink); border-color: var(--ink); color: #fff;
     box-shadow: 0 8px 18px -12px rgba(0, 0, 0, .7);
+  }
+
+  /* Demo-only controls. They post to existing admin endpoints and drive
+     browser traffic; no routing code reads anything from this panel. */
+  .demo-panel {
+    margin-bottom: 14px; padding: 16px 18px 14px 20px;
+    background: linear-gradient(150deg, #fff 58%, #fff8f4 100%);
+  }
+  .demo-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 14px; flex-wrap: wrap;
+  }
+  .demo-head .label {
+    color: var(--ink); font-size: 15px; font-weight: 650;
+    letter-spacing: -.015em; text-transform: none;
+  }
+  .demo-head .label::before { display: none; }
+  .demo-head .hint { max-width: 700px; }
+  .demo-head .chip { margin-top: 2px; }
+  .demo-groups {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px; margin-top: 14px;
+  }
+  .demo-group {
+    min-width: 0; padding-left: 12px;
+    border-left: 1px solid var(--line-2);
+  }
+  .demo-group:first-child { padding-left: 0; border-left: 0; }
+  .demo-group-label {
+    color: #9a9489; font-size: 9.5px; font-weight: 650;
+    letter-spacing: .12em; text-transform: uppercase; margin-bottom: 7px;
+  }
+  .demo-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .demo-btn {
+    appearance: none; border: 1px solid var(--line); background: #fff;
+    color: #6f6a61; font: inherit; font-size: 11px; font-weight: 550;
+    padding: 6px 10px; border-radius: 9px; cursor: pointer;
+    transition: background .18s, color .18s, border-color .18s, transform .08s;
+  }
+  .demo-btn:hover { background: #faf9f6; color: var(--ink); border-color: #d5d0c6; }
+  .demo-btn:active { transform: scale(.97); }
+  .demo-btn:disabled { opacity: .42; cursor: not-allowed; transform: none; }
+  .demo-btn.primary {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+    box-shadow: 0 8px 16px -12px rgba(255, 90, 43, .9);
+  }
+  .demo-btn.primary:hover { background: #f14d1f; border-color: #f14d1f; color: #fff; }
+  .demo-btn.danger { color: var(--bad); border-color: #ffd7d1; background: #fff8f6; }
+  .demo-btn.danger:hover { background: var(--bad-soft); border-color: #ffc4bb; }
+  .demo-note {
+    margin-top: 12px; padding: 8px 11px; border-radius: 10px;
+    color: #8a8479; background: #faf8f4; border: 1px solid var(--line-2);
+    font-size: 11px; line-height: 1.5;
+  }
+  .demo-note.live { color: #0b7565; background: var(--teal-soft); border-color: #d5f0e9; }
+  .demo-note.warn { color: #8a5a08; background: var(--amber-soft); border-color: #ffe6b8; }
+  .chip.live {
+    color: #0b7565; background: var(--teal-soft); border-color: #d5f0e9;
   }
 
   .section-head {
@@ -651,6 +711,40 @@
   [data-theme="dark"] .picker button.on {
     background: #f3f1ec; border-color: #f3f1ec; color: #111;
   }
+  [data-theme="dark"] .demo-panel {
+    background: linear-gradient(150deg, #17181b 58%, #211714 100%);
+  }
+  [data-theme="dark"] .demo-group { border-left-color: var(--line-2); }
+  [data-theme="dark"] .demo-btn {
+    background: #1b1c20; color: #b5afa5; border-color: var(--line);
+  }
+  [data-theme="dark"] .demo-btn:hover {
+    background: #222327; color: var(--ink); border-color: #3a3b40;
+  }
+  [data-theme="dark"] .demo-btn.primary {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  [data-theme="dark"] .demo-btn.primary:hover {
+    background: #f14d1f; border-color: #f14d1f;
+  }
+  [data-theme="dark"] .demo-btn.danger {
+    background: #2a1715; border-color: #3a211d; color: #ff8a80;
+  }
+  [data-theme="dark"] .demo-btn.danger:hover {
+    background: #351b18; border-color: #4a2722;
+  }
+  [data-theme="dark"] .demo-note {
+    background: #1b1c20; border-color: var(--line-2); color: #a19b91;
+  }
+  [data-theme="dark"] .demo-note.live {
+    background: #122420; border-color: #1d3b35; color: #7ee2c3;
+  }
+  [data-theme="dark"] .demo-note.warn {
+    background: #2a2115; border-color: #3a2f18; color: #e0a83c;
+  }
+  [data-theme="dark"] .chip.live {
+    background: #122420; border-color: #1d3b35; color: #7ee2c3;
+  }
   [data-theme="dark"] .tile .k { color: #a8a297; }
   [data-theme="dark"] .tile .ico {
     background: #222327; border-color: #2e2f34; color: #b7b1a7;
@@ -717,6 +811,7 @@
   }
   @media (max-width: 1120px) {
     .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .demo-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 860px) {
     .tabs { display: none; }
@@ -738,6 +833,13 @@
     .picker button { flex: 1 1 auto; }
     .panel { padding: 18px; }
     .chart { height: 150px; }
+    .demo-panel { padding: 14px; }
+    .demo-groups { grid-template-columns: 1fr; gap: 10px; }
+    .demo-group {
+      padding: 10px 0 0; border-left: 0;
+      border-top: 1px solid var(--line-2);
+    }
+    .demo-group:first-child { padding-top: 0; border-top: 0; }
   }
   @media (max-width: 1120px) {
     .boot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -900,6 +1002,50 @@
           <p class="hint">Switch it and watch the same traffic re-route — no restart, no dropped requests.</p>
         </div>
         <div class="picker" id="picker"></div>
+      </section>
+
+      <section class="panel demo-panel" id="demo-controls">
+        <div class="demo-head">
+          <div>
+            <div class="label">Demo controls</div>
+            <p class="hint">No terminal after the stack is up: start traffic, inject a backend fault, and drop the drift guard from here. Browser traffic is a demo driver, not the benchmark evidence.</p>
+          </div>
+          <span class="chip" id="demo-status" aria-live="polite">idle</span>
+        </div>
+        <div class="demo-groups">
+          <div class="demo-group">
+            <div class="demo-group-label">Traffic</div>
+            <div class="demo-actions">
+              <button class="demo-btn primary" type="button" id="demo-start">Start traffic</button>
+              <button class="demo-btn" type="button" id="demo-stop" disabled>Stop + seal</button>
+            </div>
+          </div>
+          <div class="demo-group">
+            <div class="demo-group-label">backend3 fault</div>
+            <div class="demo-actions">
+              <button class="demo-btn" type="button" id="demo-degrade"
+                      title="Inject 400 ms delay and a 35% error rate for 45 s">Degrade 45 s</button>
+              <button class="demo-btn danger" type="button" id="demo-fail"
+                      title="Inject 100% errors for 12 s; the health probe stays up, but the circuit opens">Fail 12 s</button>
+              <button class="demo-btn" type="button" id="demo-clear"
+                      title="Clear the injected slow and error faults">Clear fault</button>
+            </div>
+          </div>
+          <div class="demo-group">
+            <div class="demo-group-label">Drift guard</div>
+            <div class="demo-actions">
+              <button class="demo-btn" type="button" id="demo-drift">Stress (0.15)</button>
+              <button class="demo-btn" type="button" id="demo-restore">Restore (1.0)</button>
+            </div>
+          </div>
+          <div class="demo-group">
+            <div class="demo-group-label">Reset</div>
+            <div class="demo-actions">
+              <button class="demo-btn" type="button" id="demo-reset">Reset to ML</button>
+            </div>
+          </div>
+        </div>
+        <div class="demo-note" id="demo-note" aria-live="polite">Idle. Start traffic opens a fresh run; stop seals it. The fault buttons are demo-only and do not change routing code.</div>
       </section>
 
       <section class="tiles" id="tiles"></section>
@@ -1154,10 +1300,13 @@ function renderMl(s) {
   if (!ml) { panel.style.display = "none"; return; }
   panel.style.display = "block";
   const guard = ml.drift;
-  const serving = ml.loaded && ml.fallbacks === 0;
-  const statusText = serving ? "Predictions drive routing"
+  const demoted = !!(guard && guard.demoted);
+  const serving = ml.loaded && ml.fallbacks === 0 && !demoted;
+  const statusText = demoted ? "Demoted to least-connections"
+                   : serving ? "Predictions drive routing"
                    : ml.loaded ? "Predicting with fallbacks" : "Heuristic fallback";
-  const statusColour = serving ? "#0b7565" : ml.loaded ? "#a96605" : "#b42318";
+  const statusColour = demoted ? "#a96605"
+                    : serving ? "#0b7565" : ml.loaded ? "#a96605" : "#b42318";
   document.getElementById("mlrow").innerHTML = `
     <div><span>Status</span><b style="color:${statusColour}">${statusText}</b></div>
     <div><span>Artifact</span>${ml.artifact || "—"}</div>
@@ -1291,6 +1440,278 @@ function renderPicker(names) {
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// Demo controls: a browser-side traffic driver plus buttons around the admin
+// endpoints. This sits outside the routing path - the selected algorithm still
+// makes every decision - and its request counts are not benchmark evidence.
+// Without an active run the logger would drop rows, so Start opens one first.
+// ---------------------------------------------------------------------------
+const DEMO = {
+  running: false, busy: false, sent: 0, errors: 0,
+  runId: null, sealedRun: null, workers: [], controllers: new Set()
+};
+const DEMO_PATHS = [
+  { path: "/ping", weight: 0.40 },
+  { path: "/cpu", weight: 0.30 },
+  { path: "/payload", weight: 0.20 },
+  { path: "/io", weight: 0.10 }
+];
+const DEMO_RATE = 24;
+const DEMO_CONCURRENCY = 4;
+
+function demoPickPath() {
+  let r = Math.random();
+  for (const item of DEMO_PATHS) {
+    if (r < item.weight) return item.path;
+    r -= item.weight;
+  }
+  return DEMO_PATHS[0].path;
+}
+
+function demoWait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function demoNote(text, cls) {
+  const el = document.getElementById("demo-note");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "demo-note" + (cls ? ` ${cls}` : "");
+}
+
+function syncDemoStatus() {
+  const chip = document.getElementById("demo-status");
+  if (!chip) return;
+  if (DEMO.busy) {
+    chip.textContent = "working…";
+    chip.className = "chip";
+  } else if (DEMO.running) {
+    chip.textContent = `running · ${DEMO.sent} req · ${DEMO.errors} err`;
+    chip.className = "chip live";
+  } else if (DEMO.sealedRun) {
+    chip.textContent = "run sealed";
+    chip.className = "chip";
+  } else {
+    chip.textContent = "idle";
+    chip.className = "chip";
+  }
+}
+
+function syncDemoButtons() {
+  const start = document.getElementById("demo-start");
+  const stop = document.getElementById("demo-stop");
+  if (start) start.disabled = DEMO.running || DEMO.busy;
+  if (stop) stop.disabled = !DEMO.running || DEMO.busy;
+}
+
+async function demoWorker(rate) {
+  const interval = 1000 / rate;
+  while (DEMO.running) {
+    const started = performance.now();
+    const controller = new AbortController();
+    DEMO.controllers.add(controller);
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(demoPickPath(), {
+        cache: "no-store",
+        signal: controller.signal,
+        headers: { "cache-control": "no-cache" }
+      });
+      DEMO.sent += 1;
+      if (!response.ok) DEMO.errors += 1;
+    } catch (e) {
+      // A request aborted by Stop is not an error; a timeout while running is.
+      if (DEMO.running) {
+        DEMO.sent += 1;
+        DEMO.errors += 1;
+      }
+    } finally {
+      clearTimeout(timer);
+      DEMO.controllers.delete(controller);
+    }
+    const remaining = interval - (performance.now() - started);
+    if (DEMO.running && remaining > 0) await demoWait(remaining);
+  }
+}
+
+async function demoStart() {
+  if (DEMO.running || DEMO.busy) return;
+  DEMO.busy = true;
+  syncDemoButtons();
+  syncDemoStatus();
+  const runId = `demo_ui_${Date.now()}`;
+  demoNote(`Opening run ${runId}…`, "live");
+  try {
+    const response = await fetch(`/admin/run?run_id=${encodeURIComponent(runId)}`, {
+      method: "POST"
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch (e) {
+    DEMO.busy = false;
+    syncDemoButtons();
+    syncDemoStatus();
+    demoNote(`Could not open a run: ${e.message}. Is the balancer up?`, "warn");
+    return;
+  }
+  DEMO.busy = false;
+  DEMO.running = true;
+  DEMO.runId = runId;
+  DEMO.sealedRun = null;
+  DEMO.sent = 0;
+  DEMO.errors = 0;
+  DEMO.workers = Array.from(
+    { length: DEMO_CONCURRENCY },
+    () => demoWorker(DEMO_RATE / DEMO_CONCURRENCY)
+  );
+  syncDemoButtons();
+  syncDemoStatus();
+  demoNote(
+    `Run ${runId} · current policy ${algorithm || "…"} · about ${DEMO_RATE} req/s from this tab. ` +
+    "Keep this tab active; click Stop + seal when you are finished.",
+    "live"
+  );
+}
+
+async function demoStop() {
+  if (!DEMO.running || DEMO.busy) return;
+  DEMO.busy = true;
+  DEMO.running = false;
+  for (const controller of DEMO.controllers) controller.abort();
+  syncDemoButtons();
+  syncDemoStatus();
+  demoNote("Stopping browser traffic and sealing the run…", "warn");
+  await Promise.allSettled(DEMO.workers);
+  DEMO.workers = [];
+  const runId = DEMO.runId;
+  try {
+    const response = await fetch("/admin/seal", { method: "POST" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    DEMO.sealedRun = runId;
+    demoNote(
+      `Sealed ${runId}. The request and decision Parquet files are complete and join on (run_id, timestamp).`,
+      "live"
+    );
+  } catch (e) {
+    demoNote(`Traffic stopped, but sealing the run failed: ${e.message}`, "warn");
+  }
+  DEMO.busy = false;
+  DEMO.runId = null;
+  syncDemoButtons();
+  syncDemoStatus();
+}
+
+async function demoAction(path, successNote) {
+  if (DEMO.busy) return;
+  DEMO.busy = true;
+  syncDemoButtons();
+  syncDemoStatus();
+  demoNote("Sending the demo command…", "");
+  try {
+    const response = await fetch(path, { method: "POST" });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const body = await response.json();
+        if (body.detail) detail = body.detail;
+      } catch (e) {}
+      throw new Error(detail);
+    }
+    demoNote(successNote, "live");
+  } catch (e) {
+    demoNote(`${successNote} — failed: ${e.message}`, "warn");
+  } finally {
+    DEMO.busy = false;
+    syncDemoButtons();
+    syncDemoStatus();
+  }
+}
+
+function demoDegrade() {
+  demoAction(
+    "/admin/demo/degrade?duration_s=45",
+    "backend3 is 400 ms slower and fails 35% for 45 s. Watch its circuit badge and the traffic share move."
+  );
+}
+
+function demoFail() {
+  demoAction(
+    "/admin/demo/fail?duration_s=12",
+    "backend3 returns 503 on every request for 12 s. Its health probe stays up, but the circuit should open; retries keep client-visible errors at 0."
+  );
+}
+
+function demoClear() {
+  demoAction(
+    "/admin/demo/clear",
+    "Fault cleared. The circuit will half-open, then backend3 ramps back in and the share recovers."
+  );
+}
+
+function demoDrift() {
+  if (algorithm !== "ml") {
+    demoNote("Switch to ml with the pills above before stressing the drift guard.", "warn");
+    return;
+  }
+  demoAction(
+    "/admin/drift?threshold=0.15",
+    "Drift threshold 0.15. After the window, the guard should demote the model and route on least-connections."
+  );
+}
+
+function demoRestore() {
+  demoAction(
+    "/admin/drift?threshold=1.0",
+    "Drift threshold restored to 1.0. After a clean window, the guard should promote the model back."
+  );
+}
+
+async function demoReset() {
+  if (DEMO.busy) return;
+  DEMO.busy = true;
+  syncDemoButtons();
+  syncDemoStatus();
+  demoNote("Resetting policy, drift guard and backend3 fault…", "");
+  try {
+    for (const path of [
+      "/admin/algorithm?name=ml",
+      "/admin/drift?threshold=1.0",
+      "/admin/demo/clear"
+    ]) {
+      const response = await fetch(path, { method: "POST" });
+      if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+    }
+    algorithm = "ml";
+    DEMO.sealedRun = null;
+    syncDemoStatus();
+    demoNote("Reset: policy ml, drift threshold 1.0, backend3 faults cleared.", "live");
+  } catch (e) {
+    demoNote(`Reset failed: ${e.message}`, "warn");
+  } finally {
+    DEMO.busy = false;
+    syncDemoButtons();
+    syncDemoStatus();
+  }
+}
+
+document.getElementById("demo-start").addEventListener("click", demoStart);
+document.getElementById("demo-stop").addEventListener("click", demoStop);
+document.getElementById("demo-degrade").addEventListener("click", demoDegrade);
+document.getElementById("demo-fail").addEventListener("click", demoFail);
+document.getElementById("demo-clear").addEventListener("click", demoClear);
+document.getElementById("demo-drift").addEventListener("click", demoDrift);
+document.getElementById("demo-restore").addEventListener("click", demoRestore);
+document.getElementById("demo-reset").addEventListener("click", demoReset);
+setInterval(syncDemoStatus, 500);
+syncDemoButtons();
+syncDemoStatus();
+
+// A refresh mid-run should not leave an open Parquet file. This is best-effort:
+// the Stop button is the reliable path because it waits for in-flight requests.
+window.addEventListener("beforeunload", () => {
+  if (!DEMO.running) return;
+  try { navigator.sendBeacon("/admin/seal"); } catch (e) {}
+});
 
 async function tick() {
   const statusEl = document.getElementById("status");
