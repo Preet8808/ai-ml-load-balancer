@@ -12,7 +12,14 @@ curl.exe -s http://localhost:9090/stats     # healthy: 4, feed age well under 3 
 ```
 
 Open <http://localhost:9090/> in a browser. Keep `docs/results.md` open in a
-second tab for the last minute.
+second tab for the last minute. Make sure backend3 is running and the shipped
+defaults are selected:
+
+```powershell
+docker compose start backend3
+curl.exe -X POST "http://localhost:9090/admin/algorithm?name=ml"
+curl.exe -X POST "http://localhost:9090/admin/drift?threshold=1.0"
+```
 
 Start a run so the request and decision Parquet files are actually written
 (without an active run the balancer still routes, but the logger drops the rows
@@ -24,7 +31,8 @@ curl.exe -X POST "http://localhost:9090/admin/run?run_id=demo"
 
 Three terminals:
 
-- **A** - traffic: `python bench/demo_traffic.py --seconds 120 --rate 24`
+- **A** - traffic: `python bench/demo_traffic.py --seconds 330 --rate 24`
+  (keep it running through the failure step; 330 s covers the timeline)
 - **B** - admin calls (`curl.exe`, not PowerShell's `curl` alias)
 - **C** - optional: `docker compose logs -f balancer`
 
