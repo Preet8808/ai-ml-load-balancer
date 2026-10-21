@@ -11,7 +11,7 @@ COMPOSE ?= docker compose
 
 help:
 	@echo "make up          build and start the stack (dashboard on :9090)"
-	@echo "make test        run the automated suite (121 tests)"
+	@echo "make test        run the automated suite"
 	@echo "make benchmark   run/resume the 125-cell Phase 7 matrix"
 	@echo "make analyse     tables, CIs and charts from the matrix results"
 	@echo "make train       retrain on data/ and write models/"

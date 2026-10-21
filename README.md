@@ -126,7 +126,11 @@ algorithm live - so the same traffic can be shown being routed differently
 without restarting anything. The **Demo controls** card can also start browser
 traffic (opening and sealing a run), inject a backend3 slow/error fault, and
 stress or restore the drift guard, so a live demo does not need a terminal for
-those steps. The browser driver is intentionally not a benchmark client.
+those steps. While a run is live, the page adds a **What changed?** before/after
+strip, a traffic-share bar, an intervention timeline with latency-chart markers,
+and a sealed-run summary at Stop. The first KPI is **routable** (with the health
+probe count below it), so a green probe and an open circuit are not conflated.
+The browser driver is intentionally not a benchmark client.
 
 ```bash
 docker compose up -d                                   # dashboard at localhost:9090

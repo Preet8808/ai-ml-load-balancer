@@ -157,6 +157,32 @@ explain away.
 
 ## Dashboard
 
+The first KPI is **routable**, with the health-probe count underneath. That
+distinction matters during an error fault: the probe can stay green while the
+circuit opens, so the dashboard shows `routable 3 / 4` and `health probes
+4 / 4 up`, the backend card adds `probe up · not routable`, and a fleet banner
+names the excluded backend. The dashboard never conflates "the process answers
+health checks" with "the router will send it work".
+
+The traffic-share bar under Backends is the routed 5 s rate per backend,
+normalised to 100%. It is computed from `/stats` in the browser; it is not a
+routing input. Three more browser-side aids are derived from the same poll
+without touching the API or the logs:
+
+- **What changed?** compares the run-start snapshot with the current one for
+  p95, throughput, mean CPU and mean errors. It is directional, not a
+  significance test.
+- **Intervention timeline** records button presses plus automatic circuit
+  opens/closes and drift demotions/promotions, and marks the same moments on
+  the latency chart.
+- **Run summary** appears after **Stop + seal** with the sealed run id, duration,
+  driver counts, logger row counts and the routed distribution sampled during
+  the run.
+
+The **Demo controls** themselves start/stop/seal the run and call the existing
+admin endpoints; they never make routing decisions. The browser driver is not
+a benchmark client.
+
 The ML panel shows the guard: live MAE next to the threshold, window fill,
 demotions and promotions, and a red `DEMOTED` marker while it is in force. A
 "Recent decisions" table below the servers shows time, server, predicted ms,

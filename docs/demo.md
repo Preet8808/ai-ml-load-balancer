@@ -40,6 +40,20 @@ driver, not a load generator for capacity numbers.
 | **Restore (1.0)** | Restores the shipped drift threshold. |
 | **Reset to ML** | `ml` + threshold `1.0` + clear backend3 fault. |
 
+When traffic starts, the **What changed?** strip compares the run-start `/stats`
+snapshot with the current one (p95, throughput, mean CPU, mean errors). The
+**Traffic share** bar under Backends shows the routed 5 s rate per server, and
+every button press becomes a card in the **Intervention timeline** and a marker
+on the latency chart. Circuit opens/closes and drift demotions/promotions are
+added automatically. **Stop + seal** reveals a **Run summary** with the driver's
+exact request/error count, the logger's sealed row counts, and the routed
+distribution sampled while the run was live.
+
+The first KPI is **routable**, not just healthy: it reads `3 / 4` with
+`health probes 4 / 4 up` while backend3's circuit is open. The backend card adds
+`probe up · not routable`, and a fleet banner names the excluded backend. This
+is the distinction to point at when **Fail 12 s** is active.
+
 Optional terminal for logs:
 
 ```bash
@@ -56,9 +70,12 @@ in-flight, feed age, the latency panel, the decision table.
 ## 0:30-1:15 - Algorithms behind one interface
 
 Click **Start traffic** in the Demo controls card. The status changes to
-`running · … req`, and the same traffic is now live. While it runs, click the
+`running · … req`, and the same traffic is now live. The **What changed?**
+strip appears with the run-start snapshot on the left of each arrow; the
+**Traffic share** bar fills in under Backends. While it runs, click the
 **round_robin**, **least_conn**, and **ml** pills in the Routing algorithm card
-above. No terminal is needed.
+above. No terminal is needed. Each policy switch adds a timeline card and a
+chart marker.
 
 Watch the **reason** column in the decision table change from `round_robin` to
 `least_conn` to `ml(pred 42.1ms, inflight 3)`. Same traffic, same backends, only
@@ -77,11 +94,16 @@ exactly as the plan specifies.
 Click **Degrade 45 s**. backend3 is now 400 ms slower and returns 503 on 35% of
 requests. Expected, over the next few seconds:
 
-- its error rate rises and the circuit opens after three failures (the backend3
-  card changes to `circuit open`),
+- its error rate rises; three consecutive failures can open the circuit (the
+  backend3 card changes to `circuit open`),
 - the share of new work moves to the other three servers,
 - **no user-visible errors**: the retry sends a failed request to another
   server and it is logged as one row.
+
+Point at the **Traffic share** bar and the **What changed?** deltas as they move;
+the Degrade click is already a marked event in the timeline. If the circuit
+does not open under a 35% error rate, that is expected - the breaker needs three
+consecutive failures. For a deterministic circuit-open state use **Fail 12 s**.
 
 Point at backend3's own error rate (35%) and then at the decision table: the
 failed attempt is retried on another server, so the logged row is a 200. The
@@ -109,7 +131,11 @@ selected; if it is not, click the ml pill first.
 
 ## 3:50-4:30 - Results
 
-Click **Stop + seal** in the Demo controls card. Show `docs/results.md`:
+Click **Stop + seal** in the Demo controls card. The **Run summary** appears
+above **What changed?**: sealed run id, duration, driver requests/errors,
+logger request/decision row counts, p95 at start and end, and the observed
+routing distribution. Use it to close the run honestly, then show
+`docs/results.md`:
 
 - **M5**: XGBoost +53.9% MAE over the naive baseline (target 30%), R² 0.683,
   grouped CV 0.6455.
@@ -170,8 +196,8 @@ curl.exe -X POST "http://localhost:9090/admin/seal"
 | dashboard tiles stale | metrics feed stopped | wait 3 s: the stale-feed fallback takes over; 30/30 200s was measured |
 | Demo controls card missing | stale page or old balancer process | refresh; if the admin actions 404, `docker compose restart balancer` |
 | Start traffic says the run failed | balancer or logger unavailable | check the live dot; fall back to `/admin/run` in the command section |
-| 503s during the fault | retry could not find a healthy server | check `healthy` count; click Clear fault or wait out the 12/45 s window |
-| Fail says backend3 is still healthy | the health probe is alive; this is an error fault | point at `circuit open` and backend3's request rate, not the healthy tile |
+| 503s during the fault | retry could not find a healthy server | check the routable count; click Clear fault or wait out the 12/45 s window |
+| Fail says backend3 is still healthy | the health probe is alive; this is an error fault | point at **routable 3 / 4**, `health probes 4 / 4 up`, the fleet banner, and backend3's request rate, not the old healthy count |
 | ML row says `ml-fallback` | no model loaded | `docker compose logs balancer`; artifacts are committed, restart fixes it |
 | logger rows 0, `dropped` climbing | no active run | click Start traffic (it opens a run), or `/admin/run?run_id=demo` |
 | traffic slow | browser driver on the same host, ~20-24 req/s | it is a demo driver, not the benchmark; numbers come from Locust |

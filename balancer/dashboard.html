@@ -11,9 +11,11 @@
   The routing data is read-only: every value still comes from /stats. The
   Demo controls card adds convenience actions for a live demo (browser traffic,
   backend3 fault injection, drift stress); those post to admin endpoints and
-  never make routing decisions. The live-dot pulse is the only continuous
-  animation; the boot skeleton, entrance, hover lift and circular theme reveal
-  are one-shot or interaction-driven.
+  never make routing decisions. The story strip, traffic-share bar, timeline
+  and sealed-run summary are browser-derived views of the same /stats payload;
+  they are presentation, not inputs to the router. The live-dot pulse is the
+  only continuous animation; the boot skeleton, entrance, hover lift and
+  circular theme reveal are one-shot or interaction-driven.
 -->
 <html lang="en">
 <head>
@@ -90,7 +92,7 @@
     background: #fff; border: 1px solid var(--line);
     padding: 1px 6px; border-radius: 6px;
   }
-  #overview, #demo-controls, #backends, #latency, #decisions { scroll-margin-top: 104px; }
+  #overview, #demo-controls, #backends, #latency, #timeline, #decisions { scroll-margin-top: 104px; }
 
   .app {
     display: flex; align-items: flex-start; gap: 22px;
@@ -341,6 +343,167 @@
   .chip.live {
     color: #0b7565; background: var(--teal-soft); border-color: #d5f0e9;
   }
+  .chip.warn {
+    color: #8a5a08; background: var(--amber-soft); border-color: #ffe6b8;
+  }
+
+  /* Run story: the before/after strip, the sealed-run summary, the live
+     traffic split and the intervention timeline. All of it is derived in the
+     browser from /stats; none of it feeds a routing decision. */
+  .story-panel { margin-bottom: 14px; }
+  .story-panel[hidden], .run-summary[hidden], .fleet-alert[hidden],
+  .share-panel[hidden] { display: none; }
+  .story-panel:not([hidden]), .run-summary:not([hidden]) {
+    animation: enter-up .4s cubic-bezier(.2, .7, .2, 1) both;
+  }
+  .story-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 14px; flex-wrap: wrap;
+  }
+  .story-head .label {
+    color: var(--ink); font-size: 15px; font-weight: 650;
+    letter-spacing: -.015em; text-transform: none;
+  }
+  .story-head .label::before { display: none; }
+  .outcomes {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px; margin-top: 12px;
+  }
+  .outcome {
+    min-width: 0; padding: 11px 13px; border-radius: 14px;
+    border: 1px solid var(--line-2); background: #faf9f6;
+  }
+  .outcome .k {
+    color: #9a9489; font-size: 9.5px; font-weight: 650;
+    letter-spacing: .11em; text-transform: uppercase;
+  }
+  .outcome .pair {
+    display: flex; align-items: baseline; gap: 7px;
+    flex-wrap: wrap; margin-top: 5px;
+  }
+  .outcome .from {
+    color: var(--muted); font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .outcome .arrow { color: #c1bbb0; font-size: 11px; }
+  .outcome .now {
+    font-size: 21px; line-height: 1.1; font-weight: 650;
+    letter-spacing: -.035em; font-variant-numeric: tabular-nums;
+  }
+  .outcome .delta {
+    margin-left: auto; padding: 2px 7px; border-radius: 999px;
+    font-size: 10px; font-weight: 650; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .delta.good { color: #0b7565; background: var(--teal-soft); }
+  .delta.bad { color: var(--bad); background: var(--bad-soft); }
+  .delta.flat { color: #8a8479; background: #f1eee8; }
+
+  .run-summary {
+    margin-bottom: 14px;
+    background: linear-gradient(150deg, #fff 52%, #f2fbf7 100%);
+    border-color: #d8eee8;
+  }
+  .summary-grid {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px; margin-top: 12px;
+  }
+  .summary-cell {
+    min-width: 0; padding: 10px 12px; border-radius: 13px;
+    background: #faf9f6; border: 1px solid var(--line-2);
+    font-size: 13px; color: #2b2925;
+    font-variant-numeric: tabular-nums;
+  }
+  .summary-cell.wide { grid-column: span 2; }
+  .summary-cell span {
+    display: block; margin-bottom: 3px;
+    color: #a39d92; font-size: 9.5px; font-weight: 650;
+    letter-spacing: .1em; text-transform: uppercase;
+  }
+  .summary-cell b { font-weight: 650; }
+  .summary-cell .mono { font-family: var(--mono); font-size: 11.5px; }
+  .summary-share { margin-top: 14px; }
+  .summary-share .share-head { margin-bottom: 0; }
+  .summary-foot {
+    margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.5;
+  }
+
+  .share-panel { margin-bottom: 14px; padding: 13px 16px 12px; }
+  .share-head {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 12px; flex-wrap: wrap;
+  }
+  .share-title {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 650; letter-spacing: -.01em;
+  }
+  .share-title .hint { margin: 0; }
+  .share-bar {
+    display: flex; height: 14px; margin-top: 9px;
+    border-radius: 999px; overflow: hidden; background: #f1eee8;
+  }
+  .share-bar > i {
+    display: block; height: 100%; min-width: 0;
+    transition: width .35s ease;
+  }
+  .share-bar > i + i { box-shadow: inset 1px 0 0 rgba(255, 255, 255, .55); }
+  .share-bar .share-idle {
+    display: block; width: 100%; height: 100%;
+    background: repeating-linear-gradient(135deg, #eeeae3 0 7px, #f7f5f1 7px 14px);
+  }
+  .share-legend {
+    display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px;
+    color: var(--muted); font-size: 11px;
+  }
+  .share-legend .item {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .share-legend .sw {
+    width: 8px; height: 8px; flex: none; border-radius: 50%;
+  }
+  .share-legend b { color: var(--ink); font-weight: 600; }
+  .share-legend .state { color: var(--amber); }
+
+  .fleet-alert {
+    display: flex; gap: 8px; align-items: baseline;
+    margin: -2px 0 14px; padding: 10px 13px;
+    border-radius: 12px; border: 1px solid #ffe6b8;
+    background: var(--amber-soft); color: #7c5208;
+    font-size: 11.5px; line-height: 1.45;
+  }
+  .fleet-alert b { font-weight: 650; }
+
+  .timeline-panel { margin-top: 26px; }
+  .timeline-list {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 8px; margin-top: 10px;
+  }
+  .timeline-empty {
+    grid-column: 1 / -1; padding: 14px 2px 4px;
+    color: var(--faint); font-size: 11.5px;
+  }
+  .timeline-item {
+    min-width: 0; padding: 8px 10px;
+    border: 1px solid var(--line-2); border-left: 3px solid #c8c2b7;
+    border-radius: 10px; background: #faf9f6;
+    font-size: 11.5px; line-height: 1.35;
+  }
+  .timeline-item .tt {
+    display: block; margin-bottom: 2px;
+    color: var(--muted); font-family: var(--mono); font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .timeline-item .tl { color: #45413a; }
+  .timeline-item .tl small {
+    display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px;
+  }
+  .timeline-item.start { border-left-color: var(--teal); }
+  .timeline-item.fault { border-left-color: var(--bad); background: var(--bad-soft); }
+  .timeline-item.recover { border-left-color: var(--teal); background: var(--teal-soft); }
+  .timeline-item.drift { border-left-color: var(--amber); background: var(--amber-soft); }
+  .timeline-item.policy { border-left-color: var(--blue); background: var(--blue-soft); }
+  .timeline-item.seal { border-left-color: var(--ink); }
 
   .section-head {
     display: flex; justify-content: space-between; align-items: flex-end;
@@ -373,6 +536,10 @@
     margin-top: 18px; font-size: 34px; line-height: 1;
     font-weight: 600; letter-spacing: -.045em;
     font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+  .tile .sub {
+    margin-top: 8px; color: var(--muted); font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
   }
   .tile .ico {
     position: absolute; top: 16px; right: 16px;
@@ -491,6 +658,20 @@
     stroke-dasharray: 4 5;
   }
   .chart .grid, .chart .p95, .chart .p50 { vector-effect: non-scaling-stroke; }
+  .chart .event-line {
+    stroke: #d5cfc4; stroke-width: 1; stroke-dasharray: 2 4;
+    vector-effect: non-scaling-stroke;
+  }
+  .chart .event-dot {
+    fill: #8a8479; stroke: #fff; stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+  }
+  .chart .event-dot.start { fill: var(--teal); }
+  .chart .event-dot.fault { fill: var(--bad); }
+  .chart .event-dot.recover { fill: var(--teal); }
+  .chart .event-dot.drift { fill: var(--amber); }
+  .chart .event-dot.policy { fill: var(--blue); }
+  .chart .event-dot.seal { fill: var(--ink); }
   .legend {
     margin-top: 10px; color: #8f897e; font-size: 11.5px;
     font-variant-numeric: tabular-nums;
@@ -745,6 +926,57 @@
   [data-theme="dark"] .chip.live {
     background: #122420; border-color: #1d3b35; color: #7ee2c3;
   }
+  [data-theme="dark"] .chip.warn {
+    background: #2a2115; border-color: #3a2f18; color: #e0a83c;
+  }
+  [data-theme="dark"] .story-head .label { color: var(--ink); }
+  [data-theme="dark"] .outcome {
+    background: #1d1e22; border-color: var(--line-2);
+  }
+  [data-theme="dark"] .outcome .k { color: #a8a297; }
+  [data-theme="dark"] .outcome .from { color: #9b968d; }
+  [data-theme="dark"] .outcome .now { color: #f3f1ec; }
+  [data-theme="dark"] .outcome .arrow { color: #6f6a62; }
+  [data-theme="dark"] .delta.flat { background: #2a2b30; color: #a8a297; }
+  [data-theme="dark"] .delta.good { background: #122420; color: #7ee2c3; }
+  [data-theme="dark"] .delta.bad { background: #2a1715; color: #ff8a80; }
+  [data-theme="dark"] .run-summary {
+    background: linear-gradient(150deg, #17181b 52%, #13201d 100%);
+    border-color: #1d3b35;
+  }
+  [data-theme="dark"] .summary-cell {
+    background: #1d1e22; border-color: var(--line-2); color: #e7e2d9;
+  }
+  [data-theme="dark"] .summary-cell span { color: #a8a297; }
+  [data-theme="dark"] .summary-foot { color: #9b968d; }
+  [data-theme="dark"] .share-title { color: var(--ink); }
+  [data-theme="dark"] .share-bar { background: #2a2b30; }
+  [data-theme="dark"] .share-bar > i + i { box-shadow: inset 1px 0 0 rgba(0, 0, 0, .35); }
+  [data-theme="dark"] .share-bar .share-idle {
+    background: repeating-linear-gradient(135deg, #202125 0 7px, #292a2f 7px 14px);
+  }
+  [data-theme="dark"] .share-legend { color: #9b968d; }
+  [data-theme="dark"] .share-legend b { color: var(--ink); }
+  [data-theme="dark"] .share-legend .state { color: #e0a83c; }
+  [data-theme="dark"] .fleet-alert {
+    background: #2a2115; border-color: #3a2f18; color: #e0a83c;
+  }
+  [data-theme="dark"] .timeline-item {
+    background: #1d1e22; border-color: var(--line-2);
+    border-left-color: #3a3b40;
+  }
+  [data-theme="dark"] .timeline-item .tt { color: #9b968d; }
+  [data-theme="dark"] .timeline-item .tl { color: #e0dbd2; }
+  [data-theme="dark"] .timeline-item .tl small { color: #9b968d; }
+  [data-theme="dark"] .timeline-item.start { border-left-color: var(--teal); }
+  [data-theme="dark"] .timeline-item.fault { background: #241615; border-left-color: #ff8a80; }
+  [data-theme="dark"] .timeline-item.recover { background: #122420; border-left-color: #2dd4bf; }
+  [data-theme="dark"] .timeline-item.drift { background: #2a2115; border-left-color: #e0a83c; }
+  [data-theme="dark"] .timeline-item.policy { background: #18213a; border-left-color: #7aa2ff; }
+  [data-theme="dark"] .timeline-item.seal { border-left-color: #f3f1ec; }
+  [data-theme="dark"] .timeline-empty { color: #7c776f; }
+  [data-theme="dark"] .tile .sub { color: #9b968d; }
+  [data-theme="dark"] .tile.throughput .sub { color: rgba(255, 255, 255, .72); }
   [data-theme="dark"] .tile .k { color: #a8a297; }
   [data-theme="dark"] .tile .ico {
     background: #222327; border-color: #2e2f34; color: #b7b1a7;
@@ -778,6 +1010,9 @@
   [data-theme="dark"] .bar { background: #2a2b30; }
   [data-theme="dark"] .chart .grid { stroke: #2a2b30; }
   [data-theme="dark"] .chart .p50 { stroke: #6f6a62; }
+  [data-theme="dark"] .chart .event-line { stroke: #3a3b40; }
+  [data-theme="dark"] .chart .event-dot { stroke: #17181b; }
+  [data-theme="dark"] .chart .event-dot.seal { fill: #f3f1ec; }
   [data-theme="dark"] .legend,
   [data-theme="dark"] .legend i { color: #a19b91; }
   [data-theme="dark"] .legend i::before {
@@ -812,6 +1047,8 @@
   @media (max-width: 1120px) {
     .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .demo-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .outcomes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 860px) {
     .tabs { display: none; }
@@ -828,11 +1065,15 @@
     .brand-text small { display: none; }
     .hello h1 { font-size: 30px; }
     .tiles { grid-template-columns: 1fr; }
+    .outcomes { grid-template-columns: 1fr; }
+    .summary-grid { grid-template-columns: 1fr; }
+    .summary-cell.wide { grid-column: auto; }
     .control { padding: 14px; }
     .picker { width: 100%; }
     .picker button { flex: 1 1 auto; }
     .panel { padding: 18px; }
     .chart { height: 150px; }
+    .share-panel { padding: 12px 14px; }
     .demo-panel { padding: 14px; }
     .demo-groups { grid-template-columns: 1fr; gap: 10px; }
     .demo-group {
@@ -860,6 +1101,8 @@
     html.intro .duo, html.intro .decisions-panel, html.intro footer {
       animation: none !important;
     }
+    .story-panel, .run-summary { animation: none !important; }
+    .share-bar > i { transition: none !important; }
     .boot { transition: none; }
   }
 </style>
@@ -1048,7 +1291,31 @@
         <div class="demo-note" id="demo-note" aria-live="polite">Idle. Start traffic opens a fresh run; stop seals it. The fault buttons are demo-only and do not change routing code.</div>
       </section>
 
+      <section class="panel run-summary" id="run-summary" hidden>
+        <div class="panel-head">
+          <div>
+            <div class="label">Run summary</div>
+            <p class="hint">The sealed demo run. Driver counts are the browser's own; logged rows are the balancer's Parquet writers. Neither is benchmark evidence.</p>
+          </div>
+          <span class="chip live" id="run-summary-chip">sealed</span>
+        </div>
+        <div class="summary-grid" id="run-summary-grid"></div>
+        <div class="summary-share" id="run-summary-share"></div>
+      </section>
+
+      <section class="panel story-panel" id="story-panel" hidden>
+        <div class="story-head">
+          <div>
+            <div class="label">What changed?</div>
+            <p class="hint">The same live <code>/stats</code> numbers at Start and now. Deltas are directional, not a significance test.</p>
+          </div>
+          <span class="chip" id="story-window">run start → now</span>
+        </div>
+        <div class="outcomes" id="outcomes"></div>
+      </section>
+
       <section class="tiles" id="tiles"></section>
+      <div class="fleet-alert" id="fleet-alert" hidden aria-live="polite"></div>
 
       <div class="section-head" id="backends">
         <div>
@@ -1057,6 +1324,14 @@
         </div>
         <span class="chip" id="backend-chip">4 backends</span>
       </div>
+      <section class="panel share-panel" id="share-panel">
+        <div class="share-head">
+          <div class="share-title">Traffic share <span class="hint">routed requests in the last 5 s</span></div>
+          <span class="chip" id="share-total">waiting for traffic</span>
+        </div>
+        <div class="share-bar" id="share-bar" role="img" aria-label="Traffic share by backend"></div>
+        <div class="share-legend" id="share-legend"></div>
+      </section>
       <section class="row" id="servers"></section>
 
       <div class="duo" id="latency">
@@ -1084,6 +1359,19 @@
         </section>
       </div>
 
+      <section class="panel timeline-panel" id="timeline">
+        <div class="panel-head">
+          <div>
+            <div class="label">Intervention timeline</div>
+            <p class="hint">Buttons and automatic circuit / drift transitions, in order. The same moments are marked on the latency chart above.</p>
+          </div>
+          <span class="chip" id="timeline-chip">no events</span>
+        </div>
+        <div class="timeline-list" id="timeline-list">
+          <div class="timeline-empty">Start traffic to record interventions and automatic circuit events here.</div>
+        </div>
+      </section>
+
       <section class="panel decisions-panel" id="decisions">
         <div class="panel-head">
           <div>
@@ -1106,6 +1394,7 @@
 <script>
 const POLL_MS = 1000;
 let algorithm = null;
+let LAST_STATS = null;
 
 const ROOT = document.documentElement;
 const THEME_KEY = "ai-ml-theme";
@@ -1189,6 +1478,8 @@ if (themeButton) {
 // Small stroke icons for the KPI cards. Keyed by the tile label so the data
 // function stays untouched.
 const TILE_ICONS = {
+  "routable": '<path d="M4 7h10a4 4 0 0 1 0 8H7"/><path d="m10 4-3 3 3 3"/>' +
+              '<path d="m17 14 3 3-3 3"/>',
   "healthy": '<path d="M3 12h4l2.5-7 4.5 14 2.5-7h4"/>',
   "in flight": '<path d="M4 18h16M4 12h16M4 6h10"/>',
   "req/s (5 s)": '<path d="M4 19V5m0 14h16"/><path d="m7 15 3.5-4 3 2.5L19 7"/>',
@@ -1201,28 +1492,405 @@ const TILE_ICONS = {
                    '<path d="m9 12 2 2 4-4"/>'
 };
 
-function tile(key, value, colour, cls) {
+// ---------------------------------------------------------------------------
+// Run story. This is presentation state only: snapshots of /stats taken when
+// the demo starts and at each poll. No routing code reads it. Keeping it in the
+// browser means the API and the benchmark logs stay untouched.
+// ---------------------------------------------------------------------------
+const SERVER_COLOURS = ["#4f7cff", "#0f9d8a", "#d98a17", "#8b5cf6"];
+const SESSION = {
+  startedAt: null,
+  baseline: null,
+  latest: null,
+  frozen: false,
+  frozenSnapshot: null,
+  actions: [],
+  weights: {},
+  lastRateAt: null,
+  lastCircuit: null,
+  lastDemoted: null,
+  lastAlgorithm: null
+};
+
+function meanValue(servers, getter) {
+  if (!servers.length) return 0;
+  return servers.reduce((sum, server) => sum + (getter(server) || 0), 0) / servers.length;
+}
+
+function sessionSnapshot(s) {
+  const servers = (s && s.servers) || [];
+  const rates = servers.map(server =>
+    (server.metrics && server.metrics.req_rate_5s) || 0);
+  const totalRate = rates.reduce((sum, rate) => sum + rate, 0);
+  return {
+    at: Date.now() / 1000,
+    p95: s && s.latency && s.latency.p95 != null ? s.latency.p95 : null,
+    rate: totalRate,
+    cpu: meanValue(servers, server =>
+      server.metrics ? server.metrics.cpu_pct : 0) / 100,
+    errors: meanValue(servers, server =>
+      server.metrics ? server.metrics.error_rate_5s : 0),
+    healthy: servers.filter(server => server.healthy).length,
+    routable: servers.filter(server => server.healthy && !server.circuit_open).length,
+    open: servers.map(server => !!server.circuit_open),
+    serverIds: servers.map(server => server.server_id),
+    rates: rates,
+    shares: rates.map(rate => totalRate > 0 ? rate / totalRate : 0),
+    algorithm: s ? s.algorithm : null
+  };
+}
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[ch]);
+}
+
+function sessionBegin(stats) {
+  const snap = sessionSnapshot(stats);
+  const servers = (stats && stats.servers) || [];
+  SESSION.startedAt = Date.now() / 1000;
+  SESSION.baseline = snap;
+  SESSION.latest = snap;
+  SESSION.frozen = false;
+  SESSION.frozenSnapshot = null;
+  SESSION.actions = [];
+  SESSION.weights = {};
+  SESSION.lastRateAt = Date.now() / 1000;
+  SESSION.lastCircuit = {};
+  snap.serverIds.forEach(id => {
+    SESSION.weights[id] = 0;
+    const server = servers.find(item => item.server_id === id);
+    SESSION.lastCircuit[id] = !!(server && server.circuit_open);
+  });
+  SESSION.lastDemoted = !!(stats && stats.ml && stats.ml.drift && stats.ml.drift.demoted);
+  SESSION.lastAlgorithm = snap.algorithm;
+  const summary = document.getElementById("run-summary");
+  if (summary) summary.hidden = true;
+  sessionRecord("start", `Run opened · policy ${snap.algorithm || "—"}`,
+                `run ${DEMO.runId || "—"}`);
+  renderStory(stats);
+  renderShare(stats);
+}
+
+function sessionClear() {
+  SESSION.startedAt = null;
+  SESSION.baseline = null;
+  SESSION.latest = null;
+  SESSION.frozen = false;
+  SESSION.frozenSnapshot = null;
+  SESSION.actions = [];
+  SESSION.weights = {};
+  SESSION.lastRateAt = null;
+  SESSION.lastCircuit = null;
+  SESSION.lastDemoted = null;
+  SESSION.lastAlgorithm = null;
+  const story = document.getElementById("story-panel");
+  const summary = document.getElementById("run-summary");
+  if (story) story.hidden = true;
+  if (summary) summary.hidden = true;
+  renderTimeline();
+  renderShare(LAST_STATS);
+}
+
+function sessionRecord(kind, label, detail) {
+  if (!SESSION.startedAt) return;
+  const now = Date.now() / 1000;
+  const last = SESSION.actions[SESSION.actions.length - 1];
+  if (last && last.label === label && now - last.t < 2) return;
+  SESSION.actions.push({ t: now, kind: kind, label: label, detail: detail || "" });
+  if (SESSION.actions.length > 40) SESSION.actions.shift();
+  renderTimeline();
+}
+
+function accumulateShare(s) {
+  const now = Date.now() / 1000;
+  const previous = SESSION.lastRateAt == null ? now : SESSION.lastRateAt;
+  // The backend's 5 s rate is a smooth estimate of current routing. Integrating
+  // it over the poll interval gives a useful per-backend distribution without
+  // pretending it is an exact request count; the exact counts are in the Parquet
+  // log and in the driver's own counter.
+  const dt = Math.min(2, Math.max(0, now - previous));
+  for (const server of (s && s.servers) || []) {
+    const rate = (server.metrics && server.metrics.req_rate_5s) || 0;
+    SESSION.weights[server.server_id] = (SESSION.weights[server.server_id] || 0) + rate * dt;
+  }
+  SESSION.lastRateAt = now;
+}
+
+function observeSession(s) {
+  if (!SESSION.startedAt || SESSION.frozen) return;
+  accumulateShare(s);
+  for (const server of s.servers) {
+    const nowOpen = !!server.circuit_open;
+    const wasOpen = SESSION.lastCircuit[server.server_id];
+    if (wasOpen !== undefined && wasOpen !== nowOpen) {
+      sessionRecord(
+        nowOpen ? "fault" : "recover",
+        `${server.server_id} circuit ${nowOpen ? "opened" : "closed"}`,
+        nowOpen
+          ? "The health probe can stay green; the circuit removes it from routing."
+          : "A half-open probe succeeded, so traffic can return."
+      );
+    }
+    SESSION.lastCircuit[server.server_id] = nowOpen;
+  }
+  const demoted = !!(s.ml && s.ml.drift && s.ml.drift.demoted);
+  if (SESSION.lastDemoted != null && SESSION.lastDemoted !== demoted) {
+    sessionRecord(
+      "drift",
+      demoted ? "Drift guard demoted the model" : "Drift guard promoted the model",
+      demoted
+        ? "Routing moved to least-connections while shadow predictions continue."
+        : "Live error returned under the threshold; predictions drive routing again."
+    );
+  }
+  SESSION.lastDemoted = demoted;
+  if (SESSION.lastAlgorithm && s.algorithm !== SESSION.lastAlgorithm) {
+    sessionRecord("policy", `policy → ${s.algorithm}`,
+                  "Same traffic; only the decision function changed.");
+  }
+  SESSION.lastAlgorithm = s.algorithm;
+}
+
+function fmtMs(value) {
+  return value == null || !isFinite(value) ? "—" : `${Math.round(value)} ms`;
+}
+
+function fmtRate(value) {
+  return value == null || !isFinite(value) ? "—" : `${Math.round(value)}/s`;
+}
+
+function fmtPct(value, digits) {
+  return value == null || !isFinite(value)
+    ? "—" : `${(value * 100).toFixed(digits == null ? 2 : digits)}%`;
+}
+
+function shift(before, after, scale, unit, digits, tone) {
+  if (before == null || after == null) return { text: "—", cls: "flat" };
+  const value = (after - before) * scale;
+  if (Math.abs(value) < Math.pow(10, -digits) / 2) {
+    return { text: "no change", cls: "flat" };
+  }
+  const good = tone === "good-up" ? value > 0 : tone === "bad-up" ? value < 0 : false;
+  return {
+    text: `${value > 0 ? "+" : ""}${value.toFixed(digits)}${unit}`,
+    cls: good ? "good" : "bad"
+  };
+}
+
+function outcomeCard(label, before, after, delta) {
+  return `<div class="outcome">
+    <div class="k">${label}</div>
+    <div class="pair">
+      <span class="from">${before}</span>
+      <span class="arrow">→</span>
+      <span class="now">${after}</span>
+      <span class="delta ${delta.cls}">${delta.text}</span>
+    </div>
+  </div>`;
+}
+
+function renderStory(s) {
+  const panel = document.getElementById("story-panel");
+  if (!panel) return;
+  if (!SESSION.startedAt || !SESSION.baseline) {
+    panel.hidden = true;
+    return;
+  }
+  const snap = SESSION.frozen && SESSION.frozenSnapshot
+    ? SESSION.frozenSnapshot
+    : sessionSnapshot(s || LAST_STATS);
+  if (!SESSION.frozen) SESSION.latest = snap;
+  const base = SESSION.baseline;
+  const windowChip = document.getElementById("story-window");
+  if (windowChip) {
+    windowChip.textContent = SESSION.frozen
+      ? "sealed snapshot · start → end" : "run start → now";
+  }
+  document.getElementById("outcomes").innerHTML =
+    outcomeCard("p95 latency", fmtMs(base.p95), fmtMs(snap.p95),
+                shift(base.p95, snap.p95, 1, " ms", 0, "bad-up")) +
+    outcomeCard("throughput", fmtRate(base.rate), fmtRate(snap.rate),
+                shift(base.rate, snap.rate, 1, "/s", 1, "good-up")) +
+    outcomeCard("mean cpu", fmtPct(base.cpu, 1), fmtPct(snap.cpu, 1),
+                shift(base.cpu, snap.cpu, 100, " pp", 1, "bad-up")) +
+    outcomeCard("mean errors", fmtPct(base.errors), fmtPct(snap.errors),
+                shift(base.errors, snap.errors, 100, " pp", 2, "bad-up"));
+  panel.hidden = false;
+}
+
+function renderShare(s) {
+  const bar = document.getElementById("share-bar");
+  const legend = document.getElementById("share-legend");
+  const totalChip = document.getElementById("share-total");
+  if (!bar || !legend) return;
+  const snap = SESSION.frozen && SESSION.frozenSnapshot
+    ? SESSION.frozenSnapshot : sessionSnapshot(s || LAST_STATS);
+  const total = snap.rate;
+  if (!total) {
+    bar.innerHTML = '<span class="share-idle"></span>';
+    bar.setAttribute("aria-label", "No routed traffic in the last 5 seconds");
+  } else {
+    bar.innerHTML = snap.serverIds.map((id, i) => {
+      const pct = snap.shares[i] * 100;
+      return `<i style="width:${pct.toFixed(3)}%;background:${SERVER_COLOURS[i % SERVER_COLOURS.length]}"
+        title="${escapeHtml(id)} · ${pct.toFixed(1)}%"></i>`;
+    }).join("");
+    bar.setAttribute("aria-label", snap.serverIds.map((id, i) =>
+      `${id} ${(snap.shares[i] * 100).toFixed(1)} percent`).join(", "));
+  }
+  legend.innerHTML = snap.serverIds.map((id, i) => {
+    const open = snap.open && snap.open[i];
+    return `<span class="item">
+      <span class="sw" style="background:${SERVER_COLOURS[i % SERVER_COLOURS.length]}"></span>
+      ${escapeHtml(id)} <b>${(snap.shares[i] * 100).toFixed(1)}%</b>
+      ${open ? '<span class="state">· circuit open</span>' : ""}
+    </span>`;
+  }).join("");
+  if (totalChip) {
+    totalChip.textContent = total > 0
+      ? `${total >= 10 ? Math.round(total) : total.toFixed(1)} req/s routed`
+      : "no traffic · last 5 s";
+    totalChip.className = total > 0 ? "chip live" : "chip";
+  }
+}
+
+function renderFleet(s) {
+  const alert = document.getElementById("fleet-alert");
+  if (!alert) return;
+  const servers = (s && s.servers) || [];
+  const open = servers.filter(server => server.circuit_open);
+  const down = servers.filter(server => !server.healthy && !server.circuit_open);
+  if (!open.length && !down.length) {
+    alert.hidden = true;
+    alert.innerHTML = "";
+    return;
+  }
+  const routable = servers.filter(server => server.healthy && !server.circuit_open).length;
+  const parts = [];
+  if (open.length) {
+    parts.push(`${open.map(server => server.server_id).join(", ")} ` +
+      `${open.length === 1 ? "is" : "are"} healthy at the probe but circuit-open, so not routable`);
+  }
+  if (down.length) {
+    parts.push(`${down.map(server => server.server_id).join(", ")} ` +
+      `${down.length === 1 ? "is" : "are"} failing health checks`);
+  }
+  alert.innerHTML = `<b>Fleet state:</b> ${routable} of ${servers.length} routable. ${parts.join("; ")}.`;
+  alert.hidden = false;
+}
+
+function renderTimeline() {
+  const list = document.getElementById("timeline-list");
+  const chip = document.getElementById("timeline-chip");
+  if (!list) return;
+  if (!SESSION.actions.length) {
+    list.innerHTML = `<div class="timeline-empty">Start traffic to record interventions and automatic circuit events here.</div>`;
+    if (chip) chip.textContent = "no events";
+    return;
+  }
+  const start = SESSION.startedAt || SESSION.actions[0].t;
+  list.innerHTML = SESSION.actions.map(event => {
+    const offset = Math.max(0, Math.floor(event.t - start));
+    const clock = `${Math.floor(offset / 60)}:${String(offset % 60).padStart(2, "0")}`;
+    const kind = ["start", "fault", "recover", "drift", "policy", "seal"].includes(event.kind)
+      ? event.kind : "";
+    return `<div class="timeline-item ${kind}">
+      <span class="tt">${clock}</span>
+      <div class="tl">${escapeHtml(event.label)}
+        ${event.detail ? `<small>${escapeHtml(event.detail)}</small>` : ""}</div>
+    </div>`;
+  }).join("");
+  if (chip) chip.textContent = `${SESSION.actions.length} event${SESSION.actions.length === 1 ? "" : "s"}`;
+}
+
+function shareParts(ids, shares, open) {
+  const total = shares.reduce((sum, value) => sum + value, 0);
+  const bar = total > 0
+    ? ids.map((id, i) => `<i style="width:${(shares[i] * 100).toFixed(3)}%;background:${SERVER_COLOURS[i % SERVER_COLOURS.length]}" title="${escapeHtml(id)} · ${(shares[i] * 100).toFixed(1)}%"></i>`).join("")
+    : '<span class="share-idle"></span>';
+  const legend = ids.map((id, i) => `<span class="item">
+      <span class="sw" style="background:${SERVER_COLOURS[i % SERVER_COLOURS.length]}"></span>
+      ${escapeHtml(id)} <b>${(shares[i] * 100).toFixed(1)}%</b>
+      ${open && open[i] ? '<span class="state">· circuit open</span>' : ""}
+    </span>`).join("");
+  return { bar: bar, legend: legend, total: total };
+}
+
+function renderRunSummary(summary) {
+  const panel = document.getElementById("run-summary");
+  if (!panel) return;
+  const start = summary.start;
+  const end = summary.end;
+  const duration = Math.max(0, Math.floor(summary.duration));
+  const durationText = `${Math.floor(duration / 60)}m ${String(duration % 60).padStart(2, "0")}s`;
+  const loggedReq = summary.loggedRows == null ? "—" : summary.loggedRows.toLocaleString();
+  const loggedDec = summary.loggedDecisions == null ? "—" : summary.loggedDecisions.toLocaleString();
+  const policy = start.algorithm === end.algorithm
+    ? `${start.algorithm || "—"}`
+    : `${start.algorithm || "—"} → ${end.algorithm || "—"}`;
+  document.getElementById("run-summary-grid").innerHTML = `
+    <div class="summary-cell wide"><span>run</span><b class="mono">${escapeHtml(summary.runId)}</b></div>
+    <div class="summary-cell"><span>duration</span><b>${durationText}</b></div>
+    <div class="summary-cell"><span>timeline events</span><b>${summary.events}</b></div>
+    <div class="summary-cell"><span>driver requests</span><b>${summary.sent.toLocaleString()}</b></div>
+    <div class="summary-cell"><span>driver errors</span>
+      <b style="color:${summary.errors ? "#b42318" : "inherit"}">${summary.errors}</b></div>
+    <div class="summary-cell"><span>logged request / decision rows</span><b>${loggedReq} / ${loggedDec}</b></div>
+    <div class="summary-cell"><span>p95 start → end</span><b>${fmtMs(start.p95)} → ${fmtMs(end.p95)}</b></div>`;
+
+  const ids = end.serverIds.slice();
+  const weights = ids.map(id => SESSION.weights[id] || 0);
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+  const shares = totalWeight > 0
+    ? weights.map(value => value / totalWeight)
+    : end.shares.slice();
+  const parts = shareParts(ids, shares, end.open);
+  document.getElementById("run-summary-share").innerHTML = `
+    <div class="share-head">
+      <div class="share-title">Traffic distribution
+        <span class="hint">${totalWeight > 0
+          ? "share of the routed 5 s rates sampled while the run was live"
+          : "last 5 s snapshot; the driver counters were empty"}</span>
+      </div>
+      <span class="chip">${totalWeight > 0 ? "run-observed" : "last 5 s"}</span>
+    </div>
+    <div class="share-bar" role="img" aria-label="Run traffic distribution by backend">${parts.bar}</div>
+    <div class="share-legend">${parts.legend}</div>
+    <div class="summary-foot">Policy ${escapeHtml(policy)} · browser driver only, not benchmark evidence.
+      The committed 125-cell matrix remains the performance claim; <code>/stats</code> and <code>/docs</code> stay available.</div>`;
+  document.getElementById("run-summary-chip").textContent = "sealed";
+  panel.hidden = false;
+}
+
+function tile(key, value, colour, cls, sub) {
   const icon = TILE_ICONS[key] || "";
   return `<div class="tile ${cls || ""}">
     <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
       stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></div>
     <div class="k">${key}</div>
     <div class="v" ${colour ? `style="color:${colour}"` : ""}>${value}</div>
+    ${sub ? `<div class="sub">${sub}</div>` : ""}
   </div>`;
 }
 
 function renderTiles(s) {
   const servers = s.servers;
   const healthy = servers.filter(x => x.healthy).length;
+  const routable = servers.filter(x => x.healthy && !x.circuit_open).length;
   const inflight = servers.reduce((a, x) => a + (x.inflight_local || 0), 0);
   const rate = servers.reduce((a, x) => a + ((x.metrics && x.metrics.req_rate_5s) || 0), 0);
   const cpu = servers.reduce((a, x) => a + ((x.metrics && x.metrics.cpu_pct) || 0), 0) / servers.length;
   const errs = servers.reduce((a, x) => a + ((x.metrics && x.metrics.error_rate_5s) || 0), 0) / servers.length;
 
   document.getElementById("tiles").innerHTML =
-    tile("healthy", `${healthy} / ${servers.length}`,
-         healthy === servers.length ? null : "#b42318",
-         healthy === servers.length ? "healthy" : "alert") +
+    // "Routable" is the honest capacity number: an error fault can leave the
+    // health probe green while the circuit removes the backend from rotation.
+    tile("routable", `${routable} / ${servers.length}`,
+         routable === servers.length ? null : "#b42318",
+         routable === servers.length ? "healthy" : "alert",
+         `health probes ${healthy} / ${servers.length} up`) +
     tile("req/s (5 s)", rate.toFixed(0), null, "throughput") +
     tile("in flight", inflight) +
     tile("mean cpu", cpu.toFixed(1) + "%",
@@ -1245,7 +1913,9 @@ function renderServers(s) {
   const chip = document.getElementById("backend-chip");
   if (chip) {
     const healthy = s.servers.filter(x => x.healthy).length;
-    chip.textContent = `${s.servers.length} backends · ${healthy} healthy`;
+    const routable = s.servers.filter(x => x.healthy && !x.circuit_open).length;
+    chip.textContent = `${s.servers.length} backends · ${routable} routable · ${healthy} healthy`;
+    chip.className = routable === s.servers.length ? "chip" : "chip warn";
   }
   const html = s.servers.map((x, i) => {
     const m = x.metrics || {};
@@ -1271,6 +1941,7 @@ function renderServers(s) {
       <div class="chips">
         <span class="chip">${quota.toFixed(2)} CPU quota</span>
         ${memLimit ? `<span class="chip">${memLimit} MB limit</span>` : ""}
+        ${x.circuit_open ? `<span class="chip warn">probe up · not routable</span>` : ""}
         ${x.slow_start ? `<span class="chip">warming up</span>` : ""}
       </div>
       <div class="metrics">
@@ -1372,6 +2043,24 @@ function renderLatency(s) {
     ? `M${x(0).toFixed(1)},${y(0)} L${p95.join(" L")} L${x(p95.length - 1).toFixed(1)},${y(0)} Z`
     : "";
   const lastPoint = LATENCY_HISTORY[LATENCY_HISTORY.length - 1];
+  const firstT = LATENCY_HISTORY[0].t;
+  const lastT = lastPoint.t;
+  const markers = lastT > firstT
+    ? SESSION.actions
+        .filter(event => event.t >= firstT && event.t <= lastT)
+        .slice(-12)
+        .map(event => {
+          const xPos = PAD + ((event.t - firstT) / (lastT - firstT)) * plotW;
+          const kind = ["start", "fault", "recover", "drift", "policy", "seal"]
+            .includes(event.kind) ? event.kind : "";
+          return `<g>
+            <title>${escapeHtml(event.label)}</title>
+            <line class="event-line" x1="${xPos.toFixed(1)}" y1="${TOP - 12}"
+                  x2="${xPos.toFixed(1)}" y2="${H - BOTTOM}"></line>
+            <circle class="event-dot ${kind}" cx="${xPos.toFixed(1)}" cy="${TOP - 12}" r="3"></circle>
+          </g>`;
+        }).join("")
+    : "";
 
   svg.innerHTML = `
     <defs>
@@ -1387,7 +2076,8 @@ function renderLatency(s) {
     <path class="p95" d="${line("p95")}"></path>
     <circle cx="${x(LATENCY_HISTORY.length - 1).toFixed(1)}"
             cy="${y(lastPoint.p95).toFixed(1)}" r="3.2"
-            fill="#ff5a2b" stroke="#ffffff" stroke-width="2"></circle>`;
+            fill="#ff5a2b" stroke="#ffffff" stroke-width="2"></circle>
+    ${markers}`;
   if (scale) scale.textContent = `0–${axisMax.toFixed(0)} ms`;
   legend.innerHTML =
     `p95 <b>${lat.p95.toFixed(0)} ms</b> · p50 <i>${lat.p50.toFixed(0)} ms</i>` +
@@ -1434,8 +2124,13 @@ function renderPicker(names) {
   document.querySelectorAll("#picker button").forEach(b => {
     b.onclick = async () => {
       const name = b.dataset.name;
-      await fetch(`/admin/algorithm?name=${encodeURIComponent(name)}`, { method: "POST" });
-      algorithm = name;
+      const previous = algorithm;
+      const response = await fetch(`/admin/algorithm?name=${encodeURIComponent(name)}`, { method: "POST" });
+      if (response.ok && name !== previous) {
+        sessionRecord("policy", `policy → ${name}`,
+                      "Same traffic; only the decision function changed.");
+      }
+      if (response.ok) algorithm = name;
       renderPicker(names);
     };
   });
@@ -1560,6 +2255,14 @@ async function demoStart() {
   DEMO.sealedRun = null;
   DEMO.sent = 0;
   DEMO.errors = 0;
+  let baseline = LAST_STATS;
+  if (!baseline) {
+    try {
+      const statsResponse = await fetch("/stats", { cache: "no-store" });
+      if (statsResponse.ok) baseline = await statsResponse.json();
+    } catch (e) {}
+  }
+  sessionBegin(baseline);
   DEMO.workers = Array.from(
     { length: DEMO_CONCURRENCY },
     () => demoWorker(DEMO_RATE / DEMO_CONCURRENCY)
@@ -1584,24 +2287,61 @@ async function demoStop() {
   await Promise.allSettled(DEMO.workers);
   DEMO.workers = [];
   const runId = DEMO.runId;
+  const stoppedAt = Date.now() / 1000;
+
+  // Capture the last stats poll after the in-flight requests have drained, so
+  // the outcome strip and summary freeze on the real end state.
+  let finalStats = LAST_STATS;
+  try {
+    const statsResponse = await fetch("/stats", { cache: "no-store" });
+    if (statsResponse.ok) finalStats = await statsResponse.json();
+  } catch (e) {}
+  if (finalStats) observeSession(finalStats);
+  const end = sessionSnapshot(finalStats);
+  SESSION.frozen = true;
+  SESSION.frozenSnapshot = end;
+  SESSION.latest = end;
+
   try {
     const response = await fetch("/admin/seal", { method: "POST" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const body = await response.json();
     DEMO.sealedRun = runId;
+    const sealed = body && body.sealed ? body.sealed : null;
+    const decisions = body && body.decisions ? body.decisions : null;
+    sessionRecord("seal", "Run sealed",
+                  `run ${runId} · ${sealed && sealed.rows != null ? sealed.rows : "—"} request rows`);
+    if (SESSION.baseline) {
+      renderRunSummary({
+        runId: runId,
+        duration: Math.max(0, stoppedAt - SESSION.startedAt),
+        sent: DEMO.sent,
+        errors: DEMO.errors,
+        events: SESSION.actions.filter(event =>
+          event.kind !== "start" && event.kind !== "seal").length,
+        start: SESSION.baseline,
+        end: end,
+        loggedRows: sealed ? sealed.rows : null,
+        loggedDecisions: decisions ? decisions.rows : null
+      });
+    }
     demoNote(
       `Sealed ${runId}. The request and decision Parquet files are complete and join on (run_id, timestamp).`,
       "live"
     );
   } catch (e) {
+    sessionRecord("seal", "Seal failed", "Traffic stopped, but the Parquet files were not closed cleanly.");
     demoNote(`Traffic stopped, but sealing the run failed: ${e.message}`, "warn");
   }
+  renderStory(finalStats);
+  renderShare(finalStats);
   DEMO.busy = false;
   DEMO.runId = null;
   syncDemoButtons();
   syncDemoStatus();
 }
 
-async function demoAction(path, successNote) {
+async function demoAction(path, successNote, event) {
   if (DEMO.busy) return;
   DEMO.busy = true;
   syncDemoButtons();
@@ -1617,6 +2357,7 @@ async function demoAction(path, successNote) {
       } catch (e) {}
       throw new Error(detail);
     }
+    if (event) sessionRecord(event.kind, event.label, event.detail);
     demoNote(successNote, "live");
   } catch (e) {
     demoNote(`${successNote} — failed: ${e.message}`, "warn");
@@ -1630,21 +2371,36 @@ async function demoAction(path, successNote) {
 function demoDegrade() {
   demoAction(
     "/admin/demo/degrade?duration_s=45",
-    "backend3 is 400 ms slower and fails 35% for 45 s. Watch its circuit badge and the traffic share move."
+    "backend3 is 400 ms slower and fails 35% for 45 s. Watch its circuit badge and the traffic share move.",
+    {
+      kind: "fault",
+      label: "Degrade backend3 · 45 s",
+      detail: "400 ms extra latency and a 35% error rate injected."
+    }
   );
 }
 
 function demoFail() {
   demoAction(
     "/admin/demo/fail?duration_s=12",
-    "backend3 returns 503 on every request for 12 s. Its health probe stays up, but the circuit should open; retries keep client-visible errors at 0."
+    "backend3 returns 503 on every request for 12 s. Its health probe stays up, but the circuit should open; retries keep client-visible errors at 0.",
+    {
+      kind: "fault",
+      label: "Fail backend3 · 12 s",
+      detail: "100% errors injected; probe stays green while the circuit opens."
+    }
   );
 }
 
 function demoClear() {
   demoAction(
     "/admin/demo/clear",
-    "Fault cleared. The circuit will half-open, then backend3 ramps back in and the share recovers."
+    "Fault cleared. The circuit will half-open, then backend3 ramps back in and the share recovers.",
+    {
+      kind: "recover",
+      label: "Clear backend3 fault",
+      detail: "Slow and error injections removed."
+    }
   );
 }
 
@@ -1655,14 +2411,24 @@ function demoDrift() {
   }
   demoAction(
     "/admin/drift?threshold=0.15",
-    "Drift threshold 0.15. After the window, the guard should demote the model and route on least-connections."
+    "Drift threshold 0.15. After the window, the guard should demote the model and route on least-connections.",
+    {
+      kind: "drift",
+      label: "Stress drift guard · 0.15",
+      detail: "A deliberately low threshold makes a healthy model demote on live error."
+    }
   );
 }
 
 function demoRestore() {
   demoAction(
     "/admin/drift?threshold=1.0",
-    "Drift threshold restored to 1.0. After a clean window, the guard should promote the model back."
+    "Drift threshold restored to 1.0. After a clean window, the guard should promote the model back.",
+    {
+      kind: "recover",
+      label: "Restore drift guard · 1.0",
+      detail: "Shipped threshold restored; promotion follows a clean window."
+    }
   );
 }
 
@@ -1671,6 +2437,7 @@ async function demoReset() {
   DEMO.busy = true;
   syncDemoButtons();
   syncDemoStatus();
+  const wasRunning = DEMO.running;
   demoNote("Resetting policy, drift guard and backend3 fault…", "");
   try {
     for (const path of [
@@ -1682,7 +2449,12 @@ async function demoReset() {
       if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
     }
     algorithm = "ml";
+    if (wasRunning) {
+      sessionRecord("policy", "Reset to ML",
+                    "Policy ml · drift threshold 1.0 · backend3 fault cleared.");
+    }
     DEMO.sealedRun = null;
+    if (!wasRunning) sessionClear();
     syncDemoStatus();
     demoNote("Reset: policy ml, drift threshold 1.0, backend3 faults cleared.", "live");
   } catch (e) {
@@ -1718,7 +2490,9 @@ async function tick() {
   try {
     const r = await fetch("/stats", { cache: "no-store" });
     const s = await r.json();
+    LAST_STATS = s;
     algorithm = s.algorithm;
+    observeSession(s);
     if (!document.querySelector("#picker button")) {
       renderPicker(["random", "round_robin", "weighted_rr", "least_conn",
                     "weighted_least_conn", "least_response_time", "ml"]);
@@ -1726,7 +2500,10 @@ async function tick() {
                document.querySelector("#picker button.on").dataset.name !== algorithm) {
       renderPicker([...document.querySelectorAll("#picker button")].map(b => b.dataset.name));
     }
+    renderStory(s);
     renderTiles(s);
+    renderShare(s);
+    renderFleet(s);
     renderServers(s);
     renderMl(s);
     renderLatency(s);
