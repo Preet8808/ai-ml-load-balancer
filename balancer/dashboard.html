@@ -13,9 +13,10 @@
   backend3 fault injection, drift stress); those post to admin endpoints and
   never make routing decisions. The story strip, traffic-share bar, timeline
   and sealed-run summary are browser-derived views of the same /stats payload;
-  they are presentation, not inputs to the router. The live-dot pulse is the
-  only continuous animation; the boot skeleton, entrance, hover lift and
-  circular theme reveal are one-shot or interaction-driven.
+  they are presentation, not inputs to the router. The live-dot pulse and the
+  sampled request-flow dots are the continuous animations; the boot skeleton,
+  entrance, hover lift and circular theme reveal are one-shot or
+  interaction-driven.
 -->
 <html lang="en">
 <head>
@@ -92,7 +93,7 @@
     background: #fff; border: 1px solid var(--line);
     padding: 1px 6px; border-radius: 6px;
   }
-  #overview, #demo-controls, #backends, #latency, #timeline, #decisions { scroll-margin-top: 104px; }
+  #overview, #demo-controls, #request-flow, #backends, #latency, #timeline, #decisions { scroll-margin-top: 104px; }
 
   .app {
     display: flex; align-items: flex-start; gap: 22px;
@@ -346,6 +347,211 @@
   .chip.warn {
     color: #8a5a08; background: var(--amber-soft); border-color: #ffe6b8;
   }
+
+  /* Live request flow. Presentation only: the paths and dots are a sampled
+     animation of the measured /stats routing rate, not a packet trace. */
+  .flow-panel {
+    margin-bottom: 14px; padding: 16px 18px 14px;
+    background: linear-gradient(155deg, #fff 60%, #f7fbff 100%);
+    overflow: hidden;
+  }
+  .flow-panel .hint { max-width: 780px; }
+  .flow-head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .flow-toggle {
+    appearance: none; border: 1px solid var(--line); background: #fff;
+    color: #6f6a61; font: inherit; font-size: 10.5px; font-weight: 550;
+    padding: 5px 9px; border-radius: 9px; cursor: pointer;
+    transition: background .18s, color .18s, border-color .18s;
+  }
+  .flow-toggle:hover { background: #faf9f6; color: var(--ink); border-color: #d5d0c6; }
+  .flow-toggle[aria-pressed="true"] {
+    color: var(--accent); border-color: #ffd6c9; background: var(--accent-soft);
+  }
+  .flow-stage {
+    position: relative; margin-top: 12px; min-height: 320px;
+    display: grid; align-items: center; gap: 18px; padding: 10px 4px 4px;
+    grid-template-columns: minmax(118px, .7fr) minmax(150px, 1fr) minmax(330px, 2.3fr);
+  }
+  .flow-lines {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    overflow: visible; pointer-events: none; z-index: 0;
+  }
+  .flow-path {
+    fill: none; stroke: #ddd8ce; stroke-width: 2;
+    stroke-linecap: round; vector-effect: non-scaling-stroke;
+    transition: stroke .2s, opacity .2s;
+  }
+  .flow-path.trunk { stroke: #e4dfd5; stroke-dasharray: 5 7; }
+  .flow-path.branch { stroke: var(--branch, #ddd8ce); opacity: .38; }
+  .flow-path.is-degraded { stroke: var(--amber); stroke-dasharray: 3 5; opacity: .55; }
+  .flow-path.is-blocked { stroke: var(--bad); stroke-dasharray: 4 6; opacity: .45; }
+  .flow-block circle { fill: var(--card); stroke: #ffd7d1; stroke-width: 1; }
+  .flow-block line { stroke: var(--bad); stroke-width: 2; stroke-linecap: round; }
+  .flow-dot { pointer-events: none; }
+  .flow-dot.trunk { opacity: .55; }
+  .flow-source {
+    position: relative; z-index: 2; justify-self: start; width: 100%;
+    max-width: 154px; padding: 14px 14px 13px;
+    border: 1px solid var(--line); border-radius: 18px; background: #faf9f6;
+  }
+  .flow-source-icon { width: 34px; height: 28px; color: var(--accent); margin-bottom: 8px; }
+  .flow-source-icon svg { width: 100%; height: 100%; }
+  .flow-node-kicker, .flow-balancer-kicker {
+    color: #9a9489; font-size: 9px; font-weight: 650;
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  .flow-source b {
+    display: inline-block; margin-top: 2px; font-size: 24px; line-height: 1;
+    font-weight: 650; letter-spacing: -.04em; font-variant-numeric: tabular-nums;
+  }
+  .flow-unit { color: var(--muted); font-size: 10px; margin-left: 3px; }
+  .flow-source-sub { margin-top: 6px; color: var(--muted); font-size: 10.5px; }
+  .flow-balancer {
+    position: relative; z-index: 2; justify-self: center; width: 100%;
+    max-width: 194px; padding: 14px 14px 12px;
+    border: 1px solid #ffd9ca; border-radius: 18px;
+    background: linear-gradient(150deg, #fff, #fff4ee);
+    box-shadow: 0 16px 34px -30px rgba(255, 90, 43, .6);
+  }
+  .flow-balancer.is-warn {
+    border-color: #ffe3b3;
+    background: linear-gradient(150deg, #fff, #fffaf0);
+    box-shadow: 0 16px 34px -30px rgba(169, 102, 5, .35);
+  }
+  .flow-balancer b {
+    display: block; margin-top: 3px; font-size: 20px; line-height: 1.1;
+    font-weight: 650; letter-spacing: -.03em;
+  }
+  .flow-balancer-sub {
+    margin-top: 6px; color: var(--muted); font-size: 9.5px; line-height: 1.35;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; min-height: 26px;
+  }
+  .flow-balancer-ok {
+    display: inline-block; margin-top: 8px; padding: 2px 7px;
+    border-radius: 999px; background: var(--teal-soft); border: 1px solid #d5f0e9;
+    color: #0b7565; font-size: 9px; font-weight: 600;
+  }
+  .flow-balancer.is-warn .flow-balancer-ok {
+    background: var(--amber-soft); border-color: #ffe6b8; color: #8a5a08;
+  }
+  .flow-backends {
+    position: relative; z-index: 2; display: grid;
+    grid-template-columns: minmax(0, 1fr); gap: 9px;
+  }
+  .flow-pc {
+    --pc: #4f7cff;
+    display: grid; align-items: center;
+    grid-template-columns: minmax(170px, 1.15fr) minmax(100px, .8fr) minmax(130px, 1fr);
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "head rate bars"
+      "state foot bars";
+    gap: 3px 14px;
+    position: relative; min-width: 0; padding: 8px 11px 7px;
+    border: 1px solid var(--line); border-radius: 15px; background: var(--card);
+    box-shadow: 0 10px 24px -26px rgba(24, 21, 15, .4);
+    transition: border-color .2s, background .2s, box-shadow .2s;
+  }
+  .flow-pc.is-warn {
+    border-color: #ffe3b3; background: linear-gradient(160deg, #fff, #fffaf1);
+  }
+  .flow-pc.is-bad {
+    border-color: #ffd7d1; background: linear-gradient(160deg, #fff, #fff4f2);
+    box-shadow: 0 10px 26px -24px rgba(180, 35, 24, .35);
+  }
+  .flow-pc.is-off { border-color: #d9d5ce; background: #faf9f6; }
+  .flow-pc::before {
+    content: ""; position: absolute; left: 0; top: 10px; bottom: 10px;
+    width: 3px; border-radius: 0 3px 3px 0; background: var(--pc);
+  }
+  .flow-pc.is-warn::before { background: var(--amber); }
+  .flow-pc.is-bad::before, .flow-pc.is-off::before { background: var(--bad); }
+  .flow-pc-head {
+    grid-area: head; display: flex; align-items: center;
+    gap: 7px; min-width: 0;
+  }
+  .flow-pc-icon { position: relative; width: 28px; height: 24px; flex: none; }
+  .flow-pc-icon .screen {
+    position: absolute; left: 0; right: 0; top: 0; height: 17px;
+    display: grid; place-items: center; border-radius: 4px;
+    background: var(--pc); color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .25);
+    font-size: 7px; font-weight: 700; letter-spacing: .04em;
+  }
+  .flow-pc.is-bad .flow-pc-icon .screen,
+  .flow-pc.is-off .flow-pc-icon .screen { background: #8a8580; }
+  .flow-pc-icon .stand {
+    position: absolute; left: 50%; bottom: 0; width: 10px; height: 6px;
+    transform: translateX(-50%); border-bottom: 2px solid #b8b1a6;
+  }
+  .flow-pc-icon .stand::before {
+    content: ""; position: absolute; left: 50%; bottom: 2px; width: 2px; height: 4px;
+    transform: translateX(-50%); background: #b8b1a6;
+  }
+  .flow-pc-name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11px; font-weight: 650;
+  }
+  .flow-pc-led {
+    width: 6px; height: 6px; flex: none; margin-left: auto; border-radius: 50%;
+    background: var(--teal); box-shadow: 0 0 0 3px var(--teal-soft);
+  }
+  .flow-pc.is-warn .flow-pc-led { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+  .flow-pc.is-bad .flow-pc-led,
+  .flow-pc.is-off .flow-pc-led { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+  .flow-pc-state {
+    grid-area: state; display: flex; align-items: center;
+    justify-content: space-between; flex-wrap: wrap;
+    gap: 1px 8px; margin-top: 0; font-size: 8.5px;
+  }
+  .flow-pc-status { color: #0b7565; font-weight: 650; text-transform: uppercase; letter-spacing: .07em; }
+  .flow-pc.is-warn .flow-pc-status { color: var(--amber); }
+  .flow-pc.is-bad .flow-pc-status,
+  .flow-pc.is-off .flow-pc-status { color: var(--bad); }
+  .flow-pc-quota { color: var(--faint); font-size: 8px; white-space: nowrap; }
+  .flow-pc-rate {
+    grid-area: rate; display: flex; align-items: baseline; gap: 3px;
+    min-width: 0; margin-top: 0; font-variant-numeric: tabular-nums;
+  }
+  .flow-pc-rate b { font-size: 18px; font-weight: 650; letter-spacing: -.03em; }
+  .flow-pc-rate span { color: var(--muted); font-size: 9px; }
+  .flow-pc-rate em {
+    margin-left: auto; color: var(--muted); font-size: 9.5px;
+    font-style: normal; font-weight: 600;
+  }
+  .flow-pc-bars { grid-area: bars; display: grid; gap: 4px; margin-top: 0; min-width: 0; }
+  .flow-mini {
+    display: grid; grid-template-columns: 21px 1fr 28px; gap: 5px;
+    align-items: center; font-size: 7.5px; color: #a39d92;
+  }
+  .flow-mini i {
+    display: block; height: 4px; border-radius: 999px; background: #f1eee8; overflow: hidden;
+  }
+  .flow-mini i b {
+    display: block; height: 100%; width: 0; border-radius: inherit;
+    background: var(--pc); transition: width .35s ease;
+  }
+  .flow-mini.mem i b { background: #8b5cf6; }
+  .flow-mini em { text-align: right; font-style: normal; color: #6f6a61; font-variant-numeric: tabular-nums; }
+  .flow-pc-foot { grid-area: foot; margin-top: 0; color: var(--faint); font-size: 8px; }
+  .flow-pc-foot b { color: #6f6a61; font-weight: 600; }
+  .flow-callout {
+    margin-top: 6px; padding: 9px 11px; border-radius: 11px;
+    border: 1px solid var(--line-2); background: #faf9f6;
+    color: #6f6a61; font-size: 11px; line-height: 1.5;
+  }
+  .flow-callout.live { color: #0b7565; background: var(--teal-soft); border-color: #d5f0e9; }
+  .flow-callout.warn { color: #8a5a08; background: var(--amber-soft); border-color: #ffe6b8; }
+  .flow-callout.bad { color: var(--bad); background: var(--bad-soft); border-color: #ffd7d1; }
+  .flow-legend {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+    margin-top: 8px; color: var(--faint); font-size: 10px;
+  }
+  .flow-legend .flow-scale { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .flow-legend .flow-key { display: inline-flex; align-items: center; gap: 5px; }
+  .flow-mobile-note { display: none; }
+  .flow-key-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 
   /* Run story: the before/after strip, the sealed-run summary, the live
      traffic split and the intervention timeline. All of it is derived in the
@@ -799,6 +1005,7 @@
   html.intro .rail { animation: enter-left .6s cubic-bezier(.2, .7, .2, 1) both; }
   html.intro .hello { animation: enter-up .6s .05s both; }
   html.intro .control { animation: enter-up .6s .1s both; }
+  html.intro .flow-panel { animation: enter-up .6s .14s both; }
   html.intro .tiles { animation: enter-up .6s .16s both; }
   html.intro .section-head { animation: enter-up .55s .22s both; }
   html.intro .row { animation: enter-up .6s .26s both; }
@@ -1034,6 +1241,53 @@
   [data-theme="dark"] .pill.heur { background: #202125; border-color: var(--line); color: #a8a297; }
   [data-theme="dark"] footer { color: #979188; }
   [data-theme="dark"] footer code { background: #1c1d21; }
+  [data-theme="dark"] .flow-panel {
+    background: linear-gradient(155deg, #17181b 60%, #181b22 100%);
+    border-color: var(--line);
+  }
+  [data-theme="dark"] .flow-toggle { background: #1d1e22; color: #a8a297; }
+  [data-theme="dark"] .flow-toggle:hover { background: #222327; color: var(--ink); border-color: #34353b; }
+  [data-theme="dark"] .flow-source { background: #1d1e22; }
+  [data-theme="dark"] .flow-balancer {
+    background: linear-gradient(150deg, #1d1e22, #241a17); border-color: #3a2b25;
+  }
+  [data-theme="dark"] .flow-balancer.is-warn {
+    background: linear-gradient(150deg, #1d1e22, #241f16); border-color: #3a2f18;
+  }
+  [data-theme="dark"] .flow-balancer-ok { background: #122420; border-color: #1d3b35; color: #7ee2c3; }
+  [data-theme="dark"] .flow-balancer.is-warn .flow-balancer-ok {
+    background: #2a2115; border-color: #3a2f18; color: #e0a83c;
+  }
+  [data-theme="dark"] .flow-path { stroke: #34353b; }
+  [data-theme="dark"] .flow-path.trunk { stroke: #3a3b40; }
+  [data-theme="dark"] .flow-path.branch { opacity: .5; }
+  [data-theme="dark"] .flow-path.is-blocked { stroke: #ff8a80; }
+  [data-theme="dark"] .flow-block circle { fill: #17181b; stroke: #5b2420; }
+  [data-theme="dark"] .flow-block line { stroke: #ff8a80; }
+  [data-theme="dark"] .flow-dot.trunk { fill: #8d887f !important; }
+  [data-theme="dark"] .flow-pc { background: #1d1e22; }
+  [data-theme="dark"] .flow-pc.is-warn { background: linear-gradient(160deg, #1d1e22, #241f16); }
+  [data-theme="dark"] .flow-pc.is-bad { background: linear-gradient(160deg, #1d1e22, #241615); }
+  [data-theme="dark"] .flow-pc.is-off { background: #1a1b1f; border-color: #34353b; }
+  [data-theme="dark"] .flow-pc-quota,
+  [data-theme="dark"] .flow-pc-foot { color: #7c776f; }
+  [data-theme="dark"] .flow-pc-foot b { color: #b7b1a7; }
+  [data-theme="dark"] .flow-pc-status { color: #7ee2c3; }
+  [data-theme="dark"] .flow-pc.is-warn .flow-pc-status { color: #e0a83c; }
+  [data-theme="dark"] .flow-pc.is-bad .flow-pc-status,
+  [data-theme="dark"] .flow-pc.is-off .flow-pc-status { color: #ff8a80; }
+  [data-theme="dark"] .flow-mini { color: #7c776f; }
+  [data-theme="dark"] .flow-mini i { background: #2a2b30; }
+  [data-theme="dark"] .flow-mini em { color: #d6d0c7; }
+  [data-theme="dark"] .flow-callout {
+    background: #1d1e22; border-color: #2e2f34; color: #c9c3b8;
+  }
+  [data-theme="dark"] .flow-callout.live { background: #122420; border-color: #1d3b35; color: #7ee2c3; }
+  [data-theme="dark"] .flow-callout.warn { background: #2a2115; border-color: #3a2f18; color: #e0a83c; }
+  [data-theme="dark"] .flow-callout.bad { background: #2a1715; border-color: #3a211d; color: #ff8a80; }
+  [data-theme="dark"] .flow-legend { color: #7c776f; }
+  [data-theme="dark"] .flow-legend .flow-scale { color: #b7b1a7; }
+  [data-theme="dark"] .flow-key-dot { background: #ff8a65; }
 
   /* Circular theme reveal: the new snapshot grows from the theme button. */
   ::view-transition-old(root),
@@ -1049,6 +1303,18 @@
     .demo-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .outcomes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .flow-stage {
+      grid-template-columns: minmax(108px, .7fr) minmax(140px, 1fr) minmax(300px, 2.2fr);
+      gap: 14px;
+    }
+    .flow-pc {
+      grid-template-columns: minmax(130px, 1.15fr) minmax(80px, .8fr) minmax(90px, 1fr);
+      gap: 3px 10px;
+    }
+    .flow-pc-rate b { font-size: 16px; }
+  }
+  @media (max-width: 1000px) {
+    .tabs { display: none; }
   }
   @media (max-width: 860px) {
     .tabs { display: none; }
@@ -1056,6 +1322,9 @@
     .rail { display: none; }
     .nav { position: static; }
     .hello { padding-top: 26px; }
+  }
+  @media (max-width: 740px) {
+    .flow-pc-quota { display: none; }
   }
   @media (max-width: 720px) {
     .row { grid-template-columns: 1fr; }
@@ -1075,6 +1344,18 @@
     .chart { height: 150px; }
     .share-panel { padding: 12px 14px; }
     .demo-panel { padding: 14px; }
+    .flow-panel { padding: 14px; }
+    .flow-stage { grid-template-columns: 1fr; gap: 10px; min-height: 0; }
+    .flow-lines { display: none; }
+    .flow-source, .flow-balancer { justify-self: stretch; max-width: none; }
+    .flow-toggle, .flow-scale, .flow-legend .flow-key { display: none; }
+    .flow-mobile-note { display: inline; }
+    .flow-backends { grid-template-columns: 1fr; }
+    .flow-pc { display: block; padding: 10px 12px 9px; }
+    .flow-pc-state { margin-top: 5px; }
+    .flow-pc-rate { margin-top: 5px; }
+    .flow-pc-bars { margin-top: 6px; }
+    .flow-pc-foot { margin-top: 5px; }
     .demo-groups { grid-template-columns: 1fr; gap: 10px; }
     .demo-group {
       padding: 10px 0 0; border-left: 0;
@@ -1097,12 +1378,13 @@
     html { scroll-behavior: auto; }
     .sk::after, .dot { animation: none !important; }
     html.intro .nav, html.intro .rail, html.intro .hello, html.intro .control,
-    html.intro .tiles, html.intro .section-head, html.intro .row,
-    html.intro .duo, html.intro .decisions-panel, html.intro footer {
+    html.intro .flow-panel, html.intro .tiles, html.intro .section-head,
+    html.intro .row, html.intro .duo, html.intro .decisions-panel, html.intro footer {
       animation: none !important;
     }
     .story-panel, .run-summary { animation: none !important; }
     .share-bar > i { transition: none !important; }
+    .flow-mini i b { transition: none !important; }
     .boot { transition: none; }
   }
 </style>
@@ -1162,6 +1444,13 @@
           <path d="M7 7h.01M7 17h.01"/>
         </svg>
       </a>
+      <a class="rail-link" href="#request-flow" title="Request flow" aria-label="Request flow">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5.5" r="2.5"/><circle cx="19" cy="18.5" r="2.5"/>
+          <path d="M7.5 12h3M11.5 12 17 7M11.5 12 17 17"/>
+        </svg>
+      </a>
       <a class="rail-link" href="#latency" title="Latency" aria-label="Latency">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
              stroke-linecap="round" stroke-linejoin="round">
@@ -1196,6 +1485,7 @@
       </a>
       <nav class="tabs" aria-label="Jump to section">
         <a class="tab on" href="#overview">Overview</a>
+        <a class="tab" href="#request-flow">Flow</a>
         <a class="tab" href="#backends">Backends</a>
         <a class="tab" href="#latency">Latency</a>
         <a class="tab" href="#decisions">Decisions</a>
@@ -1289,6 +1579,57 @@
           </div>
         </div>
         <div class="demo-note" id="demo-note" aria-live="polite">Idle. Start traffic opens a fresh run; stop seals it. The fault buttons are demo-only and do not change routing code.</div>
+      </section>
+
+      <section class="panel flow-panel" id="request-flow">
+        <div class="panel-head">
+          <div>
+            <div class="label">Live request flow</div>
+            <p class="hint">A sampled animation of the measured <code>/stats</code> routing rate — not a packet trace. The balancer chooses a backend before each request is sent; when a backend leaves rotation, new work is re-routed, never migrated from one backend to another.</p>
+          </div>
+          <div class="flow-head-right">
+            <span class="chip" id="flow-chip">waiting for traffic</span>
+            <button class="flow-toggle" id="flow-toggle" type="button" aria-pressed="false">Pause flow</button>
+          </div>
+        </div>
+        <div class="flow-stage" id="flow-stage">
+          <svg class="flow-lines" id="flow-svg" viewBox="0 0 1000 360"
+               preserveAspectRatio="none" aria-hidden="true">
+            <g id="flow-paths"></g>
+            <g id="flow-blocks"></g>
+            <g id="flow-dots"></g>
+          </svg>
+
+          <div class="flow-source" id="flow-source">
+            <div class="flow-source-icon" aria-hidden="true">
+              <svg viewBox="0 0 32 26" fill="none" stroke="currentColor"
+                   stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="28" height="18" rx="3"/>
+                <path d="M2 7h28M6 4.6h.01M9 4.6h.01M12 4.6h.01"/>
+                <path d="M12 25h8M16 20v5"/>
+              </svg>
+            </div>
+            <div class="flow-node-kicker">incoming</div>
+            <b id="flow-source-rate">0.0</b><span class="flow-unit">req/s</span>
+            <div class="flow-source-sub"><span id="flow-source-inflight">0</span> in flight</div>
+          </div>
+
+          <div class="flow-balancer" id="flow-balancer">
+            <div class="flow-balancer-kicker">balancer</div>
+            <b id="flow-balancer-policy">—</b>
+            <div class="flow-balancer-sub" id="flow-balancer-last">waiting for the first decision</div>
+            <div class="flow-balancer-ok" id="flow-balancer-routable">0 / 4 routable</div>
+          </div>
+
+          <div class="flow-backends" id="flow-backends"></div>
+        </div>
+        <div class="flow-callout" id="flow-callout" aria-live="polite">Waiting for traffic. Start it from Demo controls above; this flow is driven by the same /stats poll.</div>
+        <div class="flow-legend" id="flow-legend">
+          <span class="flow-scale" id="flow-scale">1 dot ≈ — req/s</span>
+          <span class="flow-key"><i class="flow-key-dot" aria-hidden="true"></i> animated sample</span>
+          <span class="flow-mobile-note">Dots are hidden on narrow screens; the counts stay live.</span>
+          <span>exact request rows stay in the Parquet logs</span>
+        </div>
       </section>
 
       <section class="panel run-summary" id="run-summary" hidden>
@@ -1545,6 +1886,551 @@ function escapeHtml(value) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   })[ch]);
 }
+
+// ---------------------------------------------------------------------------
+// Live request flow. This is presentation only. The router picks a backend
+// before dispatch, so the dots are a synthetic sample whose *rate and split*
+// come from /stats; they are not a packet trace and nothing is "migrated"
+// from a failed server. State transitions are measured by comparing polls.
+// ---------------------------------------------------------------------------
+const SVG_NS = "http://www.w3.org/2000/svg";
+const FLOW = {
+  ready: false,
+  nodes: new Map(),
+  paths: new Map(),
+  blocks: new Map(),
+  dots: [],
+  servers: [],
+  trunk: null,
+  dotLayer: null,
+  totalRate: 0,
+  compact: window.matchMedia("(max-width: 720px)").matches,
+  shares: {},
+  lastShares: {},
+  lastStates: {},
+  incident: null,
+  recovery: null,
+  spawnTrunk: 0,
+  spawnByServer: {},
+  paused: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  raf: null,
+  lastFrame: 0,
+  layoutQueued: false
+};
+
+function flowNodeState(server) {
+  const m = server.metrics || {};
+  if (!server.healthy) return { cls: "off", label: "unreachable" };
+  if (server.circuit_open) return { cls: "bad", label: "circuit open" };
+  if (server.slow_start) return { cls: "warn", label: "slow start" };
+  if ((m.error_rate_5s || 0) > 0.02) return { cls: "warn", label: "degraded" };
+  if ((m.cpu_pct || 0) > 90) return { cls: "warn", label: "cpu hot" };
+  return { cls: "ok", label: "healthy" };
+}
+
+function flowNodeHtml(server, index) {
+  const colour = SERVER_COLOURS[index % SERVER_COLOURS.length];
+  const m = server.metrics || {};
+  const quota = Number(m.cpu_limit || server.cpu_limit || 0);
+  const mem = Number(server.mem_limit_mb || m.mem_limit_mb || 0);
+  const number = String(index + 1).padStart(2, "0");
+  return `<article class="flow-pc" data-server="${escapeHtml(server.server_id)}"
+      id="flow-${escapeHtml(server.server_id)}" style="--pc:${colour}">
+    <div class="flow-pc-head">
+      <span class="flow-pc-icon" aria-hidden="true">
+        <span class="screen">${number}</span><span class="stand"></span>
+      </span>
+      <span class="flow-pc-name">${escapeHtml(server.server_id)}</span>
+      <span class="flow-pc-led" aria-hidden="true"></span>
+    </div>
+    <div class="flow-pc-state">
+      <span class="flow-pc-status" data-flow="status">healthy</span>
+      <span class="flow-pc-quota">${quota.toFixed(2)} CPU · ${mem ? `${mem} MB` : "—"}</span>
+    </div>
+    <div class="flow-pc-rate">
+      <b data-flow="rate">0.0</b><span>req/s</span><em data-flow="share">0%</em>
+    </div>
+    <div class="flow-pc-bars">
+      <div class="flow-mini"><span>CPU</span><i><b data-flow="cpu"></b></i><em data-flow="cpupct">0%</em></div>
+      <div class="flow-mini mem"><span>MEM</span><i><b data-flow="mem"></b></i><em data-flow="mempct">0%</em></div>
+    </div>
+    <div class="flow-pc-foot"><b data-flow="inflight">0</b> in flight</div>
+  </article>`;
+}
+
+function flowBuild(servers) {
+  if (FLOW.ready) return;
+  const wrap = document.getElementById("flow-backends");
+  const pathLayer = document.getElementById("flow-paths");
+  const blockLayer = document.getElementById("flow-blocks");
+  const dotLayer = document.getElementById("flow-dots");
+  if (!wrap || !pathLayer || !blockLayer || !dotLayer) return;
+
+  FLOW.trunk = document.createElementNS(SVG_NS, "path");
+  FLOW.trunk.setAttribute("class", "flow-path trunk");
+  pathLayer.appendChild(FLOW.trunk);
+  FLOW.dotLayer = dotLayer;
+  FLOW.servers = servers;
+
+  wrap.innerHTML = servers.map((server, index) => flowNodeHtml(server, index)).join("");
+  const roots = [...wrap.querySelectorAll(".flow-pc")];
+  servers.forEach((server, index) => {
+    const id = server.server_id;
+    const root = roots.find(element => element.dataset.server === id);
+    if (!root) return;
+
+    const branch = document.createElementNS(SVG_NS, "path");
+    branch.setAttribute("class", "flow-path branch");
+    branch.dataset.server = id;
+    branch.style.setProperty("--branch", SERVER_COLOURS[index % SERVER_COLOURS.length]);
+    pathLayer.appendChild(branch);
+    FLOW.paths.set(id, branch);
+
+    const block = document.createElementNS(SVG_NS, "g");
+    block.setAttribute("class", "flow-block");
+    block.style.display = "none";
+    const circle = document.createElementNS(SVG_NS, "circle");
+    circle.setAttribute("r", "9");
+    const first = document.createElementNS(SVG_NS, "line");
+    first.setAttribute("x1", "-4.5"); first.setAttribute("y1", "-4.5");
+    first.setAttribute("x2", "4.5"); first.setAttribute("y2", "4.5");
+    const second = document.createElementNS(SVG_NS, "line");
+    second.setAttribute("x1", "-4.5"); second.setAttribute("y1", "4.5");
+    second.setAttribute("x2", "4.5"); second.setAttribute("y2", "-4.5");
+    block.append(circle, first, second);
+    blockLayer.appendChild(block);
+    FLOW.blocks.set(id, block);
+
+    FLOW.nodes.set(id, {
+      root: root,
+      rate: root.querySelector('[data-flow="rate"]'),
+      share: root.querySelector('[data-flow="share"]'),
+      status: root.querySelector('[data-flow="status"]'),
+      cpu: root.querySelector('[data-flow="cpu"]'),
+      cpuPct: root.querySelector('[data-flow="cpupct"]'),
+      mem: root.querySelector('[data-flow="mem"]'),
+      memPct: root.querySelector('[data-flow="mempct"]'),
+      inflight: root.querySelector('[data-flow="inflight"]')
+    });
+    FLOW.spawnByServer[id] = 0;
+  });
+
+  FLOW.ready = true;
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(flowQueueLayout).observe(wrap);
+  }
+  requestAnimationFrame(flowLayout);
+  flowStart();
+}
+
+function flowVisualRate(totalRate) {
+  if (totalRate <= 0.2) return 0;
+  return Math.min(10, Math.max(1, totalRate / 4));
+}
+
+function flowPoint(element, stageRect, side) {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: rect.left - stageRect.left +
+       (side === "right" ? rect.width : side === "left" ? 0 : rect.width / 2),
+    y: rect.top - stageRect.top + rect.height / 2
+  };
+}
+
+function flowLayout() {
+  const stage = document.getElementById("flow-stage");
+  const svg = document.getElementById("flow-svg");
+  if (!stage || !svg || !FLOW.ready) return;
+  const stageRect = stage.getBoundingClientRect();
+  if (stageRect.width < 1 || stageRect.height < 1) return;
+  FLOW.compact = window.matchMedia("(max-width: 720px)").matches;
+  if (FLOW.compact) flowStop();
+  svg.setAttribute("viewBox", `0 0 ${stageRect.width.toFixed(2)} ${stageRect.height.toFixed(2)}`);
+
+  const source = document.getElementById("flow-source");
+  const balancer = document.getElementById("flow-balancer");
+  if (!source || !balancer || !FLOW.trunk) return;
+  const start = flowPoint(source, stageRect, "right");
+  const balanceIn = flowPoint(balancer, stageRect, "left");
+  const balanceOut = flowPoint(balancer, stageRect, "right");
+  const curve = (from, to) => {
+    const dx = Math.max(24, (to.x - from.x) * 0.45);
+    return `C ${from.x + dx} ${from.y}, ${to.x - dx} ${to.y}, ${to.x} ${to.y}`;
+  };
+
+  FLOW.trunk.setAttribute("d", `M ${start.x} ${start.y} ${curve(start, balanceIn)}`);
+  for (const [id, node] of FLOW.nodes) {
+    const path = FLOW.paths.get(id);
+    if (!path) continue;
+    const target = flowPoint(node.root, stageRect, "left");
+    path.setAttribute("d", `M ${balanceOut.x} ${balanceOut.y} ${curve(balanceOut, target)}`);
+    const length = path.getTotalLength();
+    const block = FLOW.blocks.get(id);
+    if (block && length) {
+      const point = path.getPointAtLength(length * 0.55);
+      block.setAttribute("transform", `translate(${point.x.toFixed(2)} ${point.y.toFixed(2)})`);
+    }
+  }
+  // A resize changes every path length under an in-flight dot. Re-read it so
+  // the dot keeps moving along the drawn curve instead of jumping off it.
+  for (const dot of FLOW.dots) dot.len = dot.path.getTotalLength();
+  if (!FLOW.compact) flowStart();
+}
+
+function flowQueueLayout() {
+  if (FLOW.layoutQueued) return;
+  FLOW.layoutQueued = true;
+  requestAnimationFrame(() => {
+    FLOW.layoutQueued = false;
+    flowLayout();
+  });
+}
+
+function flowStart() {
+  if (FLOW.compact || FLOW.paused || FLOW.raf != null || !FLOW.ready) return;
+  if (FLOW.totalRate <= 0.2 && FLOW.dots.length === 0) return;
+  FLOW.lastFrame = performance.now();
+  FLOW.raf = requestAnimationFrame(flowFrame);
+}
+
+function flowStop() {
+  if (FLOW.raf != null) cancelAnimationFrame(FLOW.raf);
+  FLOW.raf = null;
+  flowClearDots();
+}
+
+function flowClearDots() {
+  for (const dot of FLOW.dots) dot.el.remove();
+  FLOW.dots = [];
+  FLOW.spawnTrunk = 0;
+  for (const id of Object.keys(FLOW.spawnByServer)) FLOW.spawnByServer[id] = 0;
+}
+
+function flowFrame(now) {
+  FLOW.raf = null;
+  if (FLOW.compact || FLOW.paused || document.hidden || !FLOW.ready) return;
+  const dt = Math.min(0.08, Math.max(0, (now - FLOW.lastFrame) / 1000));
+  FLOW.lastFrame = now;
+  if (FLOW.totalRate > 0.2 || FLOW.dots.length) {
+    flowSpawn(dt);
+    flowAdvance(dt);
+  }
+  if (FLOW.totalRate <= 0.2 && FLOW.dots.length === 0) return;
+  FLOW.raf = requestAnimationFrame(flowFrame);
+}
+
+function flowSpawn(dt) {
+  const rate = flowVisualRate(FLOW.totalRate);
+  if (rate <= 0 || !FLOW.trunk) return;
+  FLOW.spawnTrunk += dt * rate;
+  while (FLOW.spawnTrunk >= 1) {
+    flowSpawnDot("trunk", null);
+    FLOW.spawnTrunk -= 1;
+  }
+  for (const [id, share] of Object.entries(FLOW.shares)) {
+    if (!share || !FLOW.paths.has(id)) continue;
+    FLOW.spawnByServer[id] = (FLOW.spawnByServer[id] || 0) + dt * rate * share;
+    while (FLOW.spawnByServer[id] >= 1) {
+      flowSpawnDot("branch", id);
+      FLOW.spawnByServer[id] -= 1;
+    }
+  }
+}
+
+function flowSpawnDot(kind, serverId) {
+  const path = kind === "trunk" ? FLOW.trunk : FLOW.paths.get(serverId);
+  if (!path || !FLOW.dotLayer) return;
+  const length = path.getTotalLength();
+  if (!length) return;
+  if (FLOW.dots.length >= 32) {
+    const oldest = FLOW.dots.shift();
+    if (oldest) oldest.el.remove();
+  }
+  const dot = document.createElementNS(SVG_NS, "circle");
+  dot.setAttribute("class", `flow-dot ${kind}`);
+  dot.setAttribute("r", kind === "trunk" ? "2.4" : "3.2");
+  if (kind === "trunk") {
+    dot.setAttribute("fill", "#bdb6aa");
+  } else {
+    const index = FLOW.servers.findIndex(server => server.server_id === serverId);
+    dot.setAttribute("fill", SERVER_COLOURS[Math.max(0, index) % SERVER_COLOURS.length]);
+  }
+  FLOW.dotLayer.appendChild(dot);
+  FLOW.dots.push({
+    el: dot,
+    path: path,
+    len: length,
+    progress: 0,
+    duration: kind === "trunk" ? 0.8 : 1.2,
+    kind: kind
+  });
+}
+
+function flowAdvance(dt) {
+  for (let i = FLOW.dots.length - 1; i >= 0; i--) {
+    const dot = FLOW.dots[i];
+    dot.progress += dt / dot.duration;
+    if (dot.progress >= 1) {
+      dot.el.remove();
+      FLOW.dots.splice(i, 1);
+      continue;
+    }
+    const point = dot.path.getPointAtLength(dot.len * dot.progress);
+    dot.el.setAttribute("cx", point.x.toFixed(2));
+    dot.el.setAttribute("cy", point.y.toFixed(2));
+    dot.el.setAttribute("opacity",
+      dot.progress > 0.82 ? ((1 - dot.progress) / 0.18).toFixed(2) : "1");
+  }
+}
+
+function flowShareText(servers, shares) {
+  return servers.map(server =>
+    `${server.server_id} ${Math.round((shares[server.server_id] || 0) * 100)}%`).join(" · ");
+}
+
+function renderFlowCallout(s, servers, routable, totalRate) {
+  const element = document.getElementById("flow-callout");
+  if (!element) return;
+  const now = Date.now();
+  const bad = servers.filter(server => !server.healthy || server.circuit_open);
+  const degraded = servers.filter(server => flowNodeState(server).cls === "warn");
+  let text = "";
+  let cls = "";
+
+  if (FLOW.incident && now - FLOW.incident.at < 7000) {
+    const incident = FLOW.incident;
+    const label = incident.kind === "off" ? "unreachable" : "circuit open";
+    const serving = servers.filter(server => routable.includes(server.server_id));
+    const newWork = routable.length
+      ? `New work: ${flowShareText(serving, FLOW.shares)}.`
+      : "No backend is routable; new requests will fail until a backend recovers.";
+    text = `${incident.server} ${label} · ${routable.length}/${servers.length} routable. ${newWork}`;
+    if (routable.length && now - incident.at > 2500 && incident.before &&
+        Object.keys(incident.before).length) {
+      text += ` Before: ${flowShareText(servers, incident.before)} ` +
+              `→ now: ${flowShareText(servers, FLOW.shares)}.`;
+    }
+    const retries = Number((s.resilience && s.resilience.retries) || 0) -
+                    incident.retryBase;
+    if (retries > 0) text += ` Retries +${retries}.`;
+    cls = incident.kind === "off" ? "bad" : "warn";
+  } else if (FLOW.recovery && now - FLOW.recovery.at < 6000) {
+    const recovered = servers.find(server =>
+      server.server_id === FLOW.recovery.server);
+    const ramp = recovered && recovered.slow_start
+      ? "slow start is ramping its share"
+      : "new work is being routed to it again";
+    text = `${FLOW.recovery.server} is back in rotation · ${ramp}.`;
+    cls = "live";
+  } else if (bad.length) {
+    text = `${bad.map(server => server.server_id).join(", ")} not routable · ` +
+           `${routable.length}/${servers.length} can serve.`;
+    cls = "warn";
+  } else if (degraded.length) {
+    text = `${degraded.map(server => server.server_id).join(", ")} degraded · ` +
+           `all ${servers.length} still routable · new work: ` +
+           `${flowShareText(servers, FLOW.shares)}.`;
+    cls = "warn";
+  } else if (totalRate > 0.2) {
+    text = `All ${servers.length} backends routable · ${totalRate.toFixed(1)} req/s ` +
+           `routed · ${s.inflight_total || 0} in flight.`;
+    cls = "live";
+  } else {
+    text = "Waiting for traffic. Start it from Demo controls above; this flow is " +
+           "driven by the same /stats poll.";
+  }
+  element.textContent = text;
+  element.className = "flow-callout" + (cls ? ` ${cls}` : "");
+}
+
+function renderFlow(s) {
+  if (!s || !Array.isArray(s.servers) || !s.servers.length) return;
+  const servers = s.servers;
+  if (!FLOW.ready) flowBuild(servers);
+  if (!FLOW.ready) return;
+
+  const rates = servers.map(server =>
+    Number((server.metrics && server.metrics.req_rate_5s) || 0));
+  const sent = servers.map(server => Number(server.sent_since_snapshot || 0));
+  const totalRate = rates.reduce((sum, rate) => sum + rate, 0);
+  const sentTotal = sent.reduce((sum, count) => sum + count, 0);
+  // The per-poll route count reacts within one second, which a demo needs.
+  // Fall back to the 5 s rate when the poll lands between collector resets.
+  const basis = sentTotal > 0 ? sent : rates;
+  const basisTotal = basis.reduce((sum, count) => sum + count, 0);
+  const shares = {};
+  const routable = [];
+  servers.forEach((server, index) => {
+    shares[server.server_id] = basisTotal > 0 ? basis[index] / basisTotal : 0;
+    if (server.healthy && !server.circuit_open) routable.push(server.server_id);
+  });
+  const routableShare = routable.reduce((sum, id) => sum + shares[id], 0);
+  servers.forEach(server => {
+    if (!routable.includes(server.server_id) || routableShare <= 0) {
+      shares[server.server_id] = 0;
+    } else {
+      shares[server.server_id] /= routableShare;
+    }
+  });
+  const nodeStates = new Map(servers.map(server =>
+    [server.server_id, flowNodeState(server)]));
+  const degraded = servers.filter(server =>
+    nodeStates.get(server.server_id).cls === "warn");
+
+  // Compare against the previous poll before replacing the state map. The
+  // incident "before" shares are measured, not invented for the animation.
+  const now = Date.now();
+  servers.forEach(server => {
+    const state = nodeStates.get(server.server_id);
+    const previous = FLOW.lastStates[server.server_id];
+    if (previous && previous !== state.cls) {
+      if ((state.cls === "bad" || state.cls === "off") &&
+          previous !== "bad" && previous !== "off") {
+        FLOW.incident = {
+          server: server.server_id,
+          at: now,
+          kind: state.cls,
+          before: { ...FLOW.lastShares },
+          retryBase: Number((s.resilience && s.resilience.retries) || 0)
+        };
+        FLOW.recovery = null;
+      } else if ((previous === "bad" || previous === "off") &&
+                 state.cls !== "bad" && state.cls !== "off") {
+        FLOW.recovery = { server: server.server_id, at: now };
+        FLOW.incident = null;
+      }
+    }
+    FLOW.lastStates[server.server_id] = state.cls;
+  });
+
+  FLOW.servers = servers;
+  FLOW.totalRate = totalRate;
+  FLOW.shares = shares;
+  FLOW.lastShares = { ...shares };
+
+  const sourceRate = document.getElementById("flow-source-rate");
+  if (sourceRate) sourceRate.textContent = totalRate.toFixed(1);
+  const sourceInflight = document.getElementById("flow-source-inflight");
+  if (sourceInflight) sourceInflight.textContent = s.inflight_total || 0;
+  const policy = document.getElementById("flow-balancer-policy");
+  if (policy) policy.textContent = s.algorithm || "—";
+  const lastDecision = document.getElementById("flow-balancer-last");
+  if (lastDecision) {
+    const recent = (s.decisions && s.decisions.recent) || [];
+    const last = recent.length ? recent[recent.length - 1] : null;
+    lastDecision.textContent = last
+      ? `→ ${last.server_id} · ${last.reason}`
+      : "waiting for the first decision";
+    lastDecision.title = lastDecision.textContent;
+  }
+  const routableLabel = document.getElementById("flow-balancer-routable");
+  if (routableLabel) {
+    routableLabel.textContent = `${routable.length} / ${servers.length} routable`;
+  }
+  const balancer = document.getElementById("flow-balancer");
+  if (balancer) {
+    balancer.classList.toggle("is-warn",
+      routable.length < servers.length || degraded.length > 0);
+  }
+
+  servers.forEach((server, index) => {
+    const node = FLOW.nodes.get(server.server_id);
+    if (!node) return;
+    const m = server.metrics || {};
+    const state = nodeStates.get(server.server_id);
+    node.root.className = `flow-pc is-${state.cls}`;
+    node.root.style.setProperty("--pc", SERVER_COLOURS[index % SERVER_COLOURS.length]);
+    node.status.textContent = state.label;
+    node.rate.textContent = Number(m.req_rate_5s || 0).toFixed(1);
+    node.share.textContent = `${Math.round((shares[server.server_id] || 0) * 100)}%`;
+    const cpu = Math.max(0, Math.min(100, Number(m.cpu_pct || 0)));
+    const mem = Math.max(0, Math.min(100, Number(m.mem_pct || 0)));
+    node.cpu.style.width = `${cpu}%`;
+    node.cpuPct.textContent = `${Math.round(cpu)}%`;
+    node.mem.style.width = `${mem}%`;
+    node.memPct.textContent = `${Math.round(mem)}%`;
+    node.inflight.textContent = server.inflight_local || 0;
+
+    const blocked = !(server.healthy && !server.circuit_open);
+    const path = FLOW.paths.get(server.server_id);
+    if (path) {
+      path.classList.toggle("is-blocked", blocked);
+      path.classList.toggle("is-degraded", !blocked && state.cls === "warn");
+    }
+    const block = FLOW.blocks.get(server.server_id);
+    if (block) block.style.display = blocked ? "" : "none";
+  });
+
+  const chip = document.getElementById("flow-chip");
+  if (chip) {
+    if (routable.length < servers.length) {
+      chip.textContent = `${routable.length}/${servers.length} routable`;
+      chip.className = "chip warn";
+    } else if (degraded.length) {
+      chip.textContent = totalRate > 0.2
+        ? `degraded · ${totalRate.toFixed(0)} req/s`
+        : "degraded";
+      chip.className = "chip warn";
+    } else if (totalRate <= 0.2) {
+      chip.textContent = "waiting for traffic";
+      chip.className = "chip";
+    } else {
+      chip.textContent = `live · ${totalRate.toFixed(0)} req/s`;
+      chip.className = "chip live";
+    }
+  }
+
+  const visualRate = flowVisualRate(totalRate);
+  const scale = document.getElementById("flow-scale");
+  if (scale) {
+    if (visualRate > 0) {
+      const perDot = totalRate / visualRate;
+      scale.textContent = `1 dot ≈ ${perDot < 10 ? perDot.toFixed(1) : perDot.toFixed(0)} req/s`;
+    } else {
+      scale.textContent = "1 dot ≈ — req/s";
+    }
+  }
+
+  renderFlowCallout(s, servers, routable, totalRate);
+  flowStart();
+}
+
+(function bindFlowControls() {
+  const toggle = document.getElementById("flow-toggle");
+  const syncToggle = () => {
+    if (!toggle) return;
+    toggle.textContent = FLOW.paused ? "Resume flow" : "Pause flow";
+    toggle.setAttribute("aria-pressed", String(FLOW.paused));
+  };
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      FLOW.paused = !FLOW.paused;
+      syncToggle();
+      if (FLOW.paused) flowStop();
+      else flowStart();
+    });
+  }
+  syncToggle();
+
+  const stage = document.getElementById("flow-stage");
+  if (stage && "ResizeObserver" in window) {
+    new ResizeObserver(flowQueueLayout).observe(stage);
+  }
+  window.addEventListener("resize", flowQueueLayout, { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) flowStop();
+    else if (!FLOW.paused) flowStart();
+  });
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  if (motion.addEventListener) {
+    motion.addEventListener("change", event => {
+      if (!event.matches) return;
+      FLOW.paused = true;
+      flowStop();
+      syncToggle();
+    });
+  }
+})();
 
 function sessionBegin(stats) {
   const snap = sessionSnapshot(stats);
@@ -2505,6 +3391,7 @@ async function tick() {
     renderShare(s);
     renderFleet(s);
     renderServers(s);
+    renderFlow(s);
     renderMl(s);
     renderLatency(s);
     renderDecisions(s);

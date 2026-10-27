@@ -54,6 +54,26 @@ The first KPI is **routable**, not just healthy: it reads `3 / 4` with
 `probe up · not routable`, and a fleet banner names the excluded backend. This
 is the distinction to point at when **Fail 12 s** is active.
 
+### Live request flow panel
+
+The **Live request flow** card below the controls turns the same `/stats` poll
+into a simple map: incoming rate -> balancer -> four PC cards, with the branch
+split sized by the measured share of new work. It is deliberately a *sample*:
+one dot is roughly N req/s (the legend shows N), not a packet. Dots are
+generated after the router has chosen a backend, so a failed backend is removed
+from the next decision; requests are never migrated from it.
+
+- `circuit open` means a demo fault took the backend out of rotation while its
+  health probe stayed green: always for **Fail 12 s**, and possible under
+  **Degrade 45 s** if the breaker sees three consecutive failures.
+- `unreachable` means the health probe is failing too, which is what
+  `docker compose stop backend3` produces. That is a manual terminal option,
+  not a demo button.
+- **Pause flow** stops the dots without stopping traffic or metrics. With
+  `prefers-reduced-motion`, the animation starts paused; the numbers still
+  update every second. Below 720 px the dots are hidden (the panel says so)
+  and the cards remain as a live summary.
+
 Optional terminal for logs:
 
 ```bash
@@ -72,10 +92,11 @@ in-flight, feed age, the latency panel, the decision table.
 Click **Start traffic** in the Demo controls card. The status changes to
 `running · … req`, and the same traffic is now live. The **What changed?**
 strip appears with the run-start snapshot on the left of each arrow; the
-**Traffic share** bar fills in under Backends. While it runs, click the
-**round_robin**, **least_conn**, and **ml** pills in the Routing algorithm card
-above. No terminal is needed. Each policy switch adds a timeline card and a
-chart marker.
+**Traffic share** bar fills in under Backends, and the **Live request flow**
+panel starts moving dots from the balancer to the four PCs. While it runs,
+click the **round_robin**, **least_conn**, and **ml** pills in the Routing
+algorithm card above. No terminal is needed. Each policy switch adds a timeline
+card and a chart marker.
 
 Watch the **reason** column in the decision table change from `round_robin` to
 `least_conn` to `ml(pred 42.1ms, inflight 3)`. Same traffic, same backends, only
@@ -101,7 +122,10 @@ requests. Expected, over the next few seconds:
   server and it is logged as one row.
 
 Point at the **Traffic share** bar and the **What changed?** deltas as they move;
-the Degrade click is already a marked event in the timeline. If the circuit
+the Degrade click is already a marked event in the timeline. In the **Live
+request flow** panel, backend3's branch turns dashed and its PC card changes to
+`degraded` or `circuit open`; if the breaker opens, a cross appears on the
+branch and the dots visibly split across the remaining three PCs. If the circuit
 does not open under a 35% error rate, that is expected - the breaker needs three
 consecutive failures. For a deterministic circuit-open state use **Fail 12 s**.
 

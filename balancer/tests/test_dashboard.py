@@ -40,10 +40,28 @@ def test_run_story_elements_exist_and_ids_are_unique():
         "demo-fail",
         "demo-drift",
         "demo-reset",
+        "request-flow",
+        "flow-stage",
+        "flow-svg",
+        "flow-source",
+        "flow-balancer",
+        "flow-backends",
+        "flow-callout",
+        "flow-legend",
+        "flow-toggle",
+        "flow-chip",
+        "flow-scale",
     }
     ids = re.findall(r'id="([^"]+)"', html)
     assert not {item for item in ids if ids.count(item) > 1}
     assert required.issubset(set(ids))
+
+
+def test_request_flow_is_labelled_as_a_sampled_animation():
+    html = _html()
+    assert "not a packet trace" in html
+    assert "new work is re-routed, never migrated" in html
+    assert "same /stats poll" in html
 
 
 def test_routable_and_health_probe_are_shown_as_different_things():
